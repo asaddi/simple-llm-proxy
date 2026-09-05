@@ -19,7 +19,7 @@ use tracing::{Level, event, instrument};
 #[derive(Debug, Clone, Parser)]
 #[command(name = "simple-llm-proxy")]
 struct Args {
-    #[arg(long, default_value = "0.0.0.0")]
+    #[arg(long, default_value = "127.0.0.1")]
     host: String,
     #[arg(long, default_value = "3000")]
     port: u16,
@@ -39,6 +39,7 @@ struct ModelGateway {
 
 impl ModelGateway {
     pub fn new(base_url: &str, api_key: Option<&str>) -> Self {
+        let base_url = base_url.trim_end_matches('/');
         let mut headers = header::HeaderMap::new();
         if let Some(key) = api_key {
             let mut value =
@@ -95,7 +96,7 @@ async fn chat_handler(
             event!(Level::ERROR, "streaming_aware_proxy failed: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": e.to_string()})).into_response(),
+                Json(json!({"error":{"message":e.to_string()}})).into_response(),
             )
         }
     }
@@ -108,7 +109,7 @@ async fn model_handler(State(state): State<Arc<ModelGateway>>) -> (StatusCode, i
             event!(Level::ERROR, "model_handler failed: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error": e.to_string()})).into_response(),
+                Json(json!({"error":{"message":e.to_string()}})).into_response(),
             )
         }
     }
@@ -130,6 +131,12 @@ async fn main() -> Result<()> {
     };
 
     let model_gateway = ModelGateway::new(args.base_url.as_str(), api_key.as_deref());
+
+    event!(
+        Level::INFO,
+        "Listening on {bind_addr}; forwarding to {}",
+        &model_gateway.base_url
+    );
 
     let shared_model_gateway = Arc::new(model_gateway);
 
