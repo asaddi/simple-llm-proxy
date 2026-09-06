@@ -14,7 +14,9 @@ use axum::{
 use clap::Parser;
 use reqwest::{Client, StatusCode, header};
 use serde_json::{Value, json};
-use tracing::{Level, event, instrument};
+use tracing::{Level, event};
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{EnvFilter, fmt};
 
 const DEFAULT_BASE_URL: &str = "http://localhost:8080/v1";
 
@@ -65,7 +67,6 @@ impl ModelGateway {
         result
     }
 
-    #[instrument]
     async fn streaming_aware_proxy(
         &self,
         path: &str,
@@ -80,7 +81,6 @@ impl ModelGateway {
         Ok(Response::new(Body::from_stream(resp.bytes_stream())))
     }
 
-    #[instrument]
     async fn model_handler(&self) -> Result<Response<Body>> {
         let resp = self.client.get(self.endpoint("/models")).send().await?;
         Ok(Response::new(Body::from_stream(resp.bytes_stream())))
@@ -145,7 +145,15 @@ async fn shutdown_signal() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    let fmt_layer = fmt::layer().with_target(false);
+    let filter_layer = EnvFilter::try_from_default_env()
+        .or_else(|_| EnvFilter::try_new("info"))
+        .unwrap();
+
+    tracing_subscriber::registry()
+        .with(filter_layer)
+        .with(fmt_layer)
+        .init();
 
     let args = Args::parse();
     let bind_addr = format!("{}:{}", args.host, args.port);
@@ -185,6 +193,8 @@ async fn main() -> Result<()> {
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+
+    event!(Level::INFO, "Exiting...");
 
     Ok(())
 }
