@@ -67,54 +67,69 @@ impl ModelGateway {
         result
     }
 
+    fn make_proxy_response(orig_resp: reqwest::Response) -> Response<Body> {
+        let mut resp_builder = Response::builder().status(orig_resp.status());
+        {
+            let headers = resp_builder.headers_mut().unwrap();
+            for (k, v) in orig_resp.headers() {
+                headers.append(k, v.clone());
+            }
+        }
+        resp_builder
+            .body(Body::from_stream(orig_resp.bytes_stream()))
+            .unwrap()
+    }
+
     async fn streaming_aware_proxy(
         &self,
         path: &str,
         Json(payload): Json<Value>,
     ) -> Result<Response<Body>> {
-        let resp = self
+        let orig_resp = self
             .client
             .post(self.endpoint(path))
             .json(&payload)
             .send()
             .await?;
-        Ok(Response::new(Body::from_stream(resp.bytes_stream())))
+        Ok(Self::make_proxy_response(orig_resp))
     }
 
     async fn model_handler(&self) -> Result<Response<Body>> {
-        let resp = self.client.get(self.endpoint("/models")).send().await?;
-        Ok(Response::new(Body::from_stream(resp.bytes_stream())))
+        let orig_resp = self.client.get(self.endpoint("/models")).send().await?;
+        Ok(Self::make_proxy_response(orig_resp))
     }
 }
 
 async fn chat_handler(
     State(state): State<Arc<ModelGateway>>,
     Json(payload): Json<Value>,
-) -> (StatusCode, impl IntoResponse) {
+) -> Response<Body> {
     match state
         .streaming_aware_proxy("/chat/completions", Json(payload))
         .await
     {
-        Ok(resp) => (resp.status(), resp),
+        Ok(resp) => resp,
         Err(e) => {
             event!(Level::ERROR, "streaming_aware_proxy failed: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error":{"message":e.to_string()}})).into_response(),
             )
+                .into_response()
         }
     }
 }
 
-async fn model_handler(State(state): State<Arc<ModelGateway>>) -> (StatusCode, impl IntoResponse) {
+async fn model_handler(State(state): State<Arc<ModelGateway>>) -> Response<Body> {
     match state.model_handler().await {
-        Ok(resp) => (resp.status(), resp),
+        Ok(resp) => resp,
         Err(e) => {
             event!(Level::ERROR, "model_handler failed: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({"error":{"message":e.to_string()}})).into_response(),
             )
+                .into_response()
         }
     }
 }
