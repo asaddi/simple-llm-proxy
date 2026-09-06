@@ -1,13 +1,16 @@
 #![warn(clippy::pedantic)]
 
-use std::sync::Arc;
+use std::{
+    collections::HashSet,
+    sync::{Arc, LazyLock},
+};
 
 use anyhow::Result;
 use axum::{
     Json, Router,
     body::Body,
     extract::State,
-    http::Response,
+    http::{HeaderName, Response},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -19,6 +22,19 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
 
 const DEFAULT_BASE_URL: &str = "http://localhost:8080/v1";
+
+static HOP_BY_HOP_HEADERS: LazyLock<HashSet<HeaderName>> = LazyLock::new(|| {
+    let mut headers = HashSet::new();
+    headers.insert(header::TRANSFER_ENCODING);
+    headers.insert(header::TE);
+    headers.insert(header::CONNECTION);
+    headers.insert(header::TRAILER);
+    headers.insert(header::UPGRADE);
+    headers.insert(header::PROXY_AUTHORIZATION);
+    headers.insert(header::PROXY_AUTHENTICATE);
+    headers.insert(HeaderName::from_static("keep-alive"));
+    headers
+});
 
 #[derive(Debug, Clone, Parser)]
 #[command(name = "simple-llm-proxy")]
@@ -71,9 +87,10 @@ impl LlmProxy {
         let mut resp_builder = Response::builder().status(orig_resp.status());
         {
             let headers = resp_builder.headers_mut().unwrap();
-            // FIXME We probably shouldn't be copying *everything*
             for (k, v) in orig_resp.headers() {
-                headers.append(k, v.clone());
+                if !HOP_BY_HOP_HEADERS.contains(k) {
+                    headers.append(k, v.clone());
+                }
             }
         }
         resp_builder
