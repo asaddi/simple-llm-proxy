@@ -16,6 +16,8 @@ use reqwest::{Client, StatusCode, header};
 use serde_json::{Value, json};
 use tracing::{Level, event, instrument};
 
+const DEFAULT_BASE_URL: &str = "http://localhost:8080/v1";
+
 #[derive(Debug, Clone, Parser)]
 #[command(name = "simple-llm-proxy")]
 struct Args {
@@ -23,8 +25,10 @@ struct Args {
     host: String,
     #[arg(long, default_value = "3000")]
     port: u16,
-    #[arg(long, default_value = "http://localhost:8080/v1")]
-    base_url: String,
+    #[arg(long)]
+    base_url: Option<String>,
+    #[arg(long)]
+    base_url_env: Option<String>,
     #[arg(long)]
     api_key: Option<String>,
     #[arg(long)]
@@ -122,6 +126,14 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let bind_addr = format!("{}:{}", args.host, args.port);
 
+    let base_url = match args.base_url {
+        Some(val) => val,
+        None => match args.base_url_env {
+            Some(var) => std::env::var(var)?,
+            None => DEFAULT_BASE_URL.to_owned(),
+        },
+    };
+
     let api_key = match args.api_key {
         Some(val) => Some(val),
         None => match args.api_key_env {
@@ -130,7 +142,7 @@ async fn main() -> Result<()> {
         },
     };
 
-    let model_gateway = ModelGateway::new(args.base_url.as_str(), api_key.as_deref());
+    let model_gateway = ModelGateway::new(base_url.as_str(), api_key.as_deref());
 
     event!(
         Level::INFO,
