@@ -38,12 +38,12 @@ struct Args {
 }
 
 #[derive(Debug, Clone)]
-struct ModelGateway {
+struct LlmProxy {
     client: Client,
     base_url: String,
 }
 
-impl ModelGateway {
+impl LlmProxy {
     pub fn new(base_url: &str, api_key: Option<&str>) -> Self {
         let base_url = base_url.trim_end_matches('/');
         let mut headers = header::HeaderMap::new();
@@ -71,6 +71,7 @@ impl ModelGateway {
         let mut resp_builder = Response::builder().status(orig_resp.status());
         {
             let headers = resp_builder.headers_mut().unwrap();
+            // FIXME We probably shouldn't be copying *everything*
             for (k, v) in orig_resp.headers() {
                 headers.append(k, v.clone());
             }
@@ -80,11 +81,7 @@ impl ModelGateway {
             .unwrap()
     }
 
-    async fn streaming_aware_proxy(
-        &self,
-        path: &str,
-        Json(payload): Json<Value>,
-    ) -> Result<Response<Body>> {
+    async fn post_proxy(&self, path: &str, Json(payload): Json<Value>) -> Result<Response<Body>> {
         let orig_resp = self
             .client
             .post(self.endpoint(path))
@@ -94,42 +91,39 @@ impl ModelGateway {
         Ok(Self::make_proxy_response(orig_resp))
     }
 
-    async fn model_handler(&self) -> Result<Response<Body>> {
-        let orig_resp = self.client.get(self.endpoint("/models")).send().await?;
+    async fn get_proxy(&self, path: &str) -> Result<Response<Body>> {
+        let orig_resp = self.client.get(self.endpoint(path)).send().await?;
         Ok(Self::make_proxy_response(orig_resp))
     }
-}
 
-async fn chat_handler(
-    State(state): State<Arc<ModelGateway>>,
-    Json(payload): Json<Value>,
-) -> Response<Body> {
-    match state
-        .streaming_aware_proxy("/chat/completions", Json(payload))
-        .await
-    {
-        Ok(resp) => resp,
-        Err(e) => {
-            event!(Level::ERROR, "streaming_aware_proxy failed: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":{"message":e.to_string()}})).into_response(),
-            )
-                .into_response()
+    async fn chat_handler(
+        State(state): State<Arc<LlmProxy>>,
+        Json(payload): Json<Value>,
+    ) -> Response<Body> {
+        match state.post_proxy("/chat/completions", Json(payload)).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                event!(Level::ERROR, "streaming_aware_proxy failed: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error":{"message":e.to_string()}})).into_response(),
+                )
+                    .into_response()
+            }
         }
     }
-}
 
-async fn model_handler(State(state): State<Arc<ModelGateway>>) -> Response<Body> {
-    match state.model_handler().await {
-        Ok(resp) => resp,
-        Err(e) => {
-            event!(Level::ERROR, "model_handler failed: {e}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({"error":{"message":e.to_string()}})).into_response(),
-            )
-                .into_response()
+    async fn model_handler(State(state): State<Arc<LlmProxy>>) -> Response<Body> {
+        match state.get_proxy("/models").await {
+            Ok(resp) => resp,
+            Err(e) => {
+                event!(Level::ERROR, "model_handler failed: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(json!({"error":{"message":e.to_string()}})).into_response(),
+                )
+                    .into_response()
+            }
         }
     }
 }
@@ -189,7 +183,7 @@ async fn main() -> Result<()> {
         },
     };
 
-    let model_gateway = ModelGateway::new(base_url.as_str(), api_key.as_deref());
+    let model_gateway = LlmProxy::new(base_url.as_str(), api_key.as_deref());
 
     event!(
         Level::INFO,
@@ -200,8 +194,8 @@ async fn main() -> Result<()> {
     let shared_model_gateway = Arc::new(model_gateway);
 
     let app = Router::new()
-        .route("/v1/models", get(model_handler))
-        .route("/v1/chat/completions", post(chat_handler))
+        .route("/v1/models", get(LlmProxy::model_handler))
+        .route("/v1/chat/completions", post(LlmProxy::chat_handler))
         .with_state(shared_model_gateway);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
