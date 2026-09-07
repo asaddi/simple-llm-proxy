@@ -3,6 +3,7 @@
 use std::{
     collections::HashSet,
     sync::{Arc, LazyLock},
+    time::Duration,
 };
 
 use anyhow::Result;
@@ -14,6 +15,7 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
+use bon::bon;
 use clap::Parser;
 use reqwest::{Client, StatusCode, header};
 use serde_json::{Value, json};
@@ -22,6 +24,9 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
 
 const DEFAULT_BASE_URL: &str = "http://localhost:8080/v1";
+const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_READ_TIMEOUT: Duration = Duration::from_mins(5);
+const DEFAULT_TOTAL_TIMEOUT: Duration = Duration::from_mins(10);
 
 static HOP_BY_HOP_HEADERS: LazyLock<HashSet<HeaderName>> = LazyLock::new(|| {
     let mut headers = HashSet::new();
@@ -59,8 +64,16 @@ struct LlmProxy {
     base_url: String,
 }
 
+#[bon]
 impl LlmProxy {
-    pub fn new(base_url: &str, api_key: Option<&str>) -> Self {
+    #[builder]
+    fn new(
+        base_url: &str,
+        api_key: Option<&str>,
+        connect_timeout: Option<Duration>,
+        read_timeout: Option<Duration>,
+        total_timeout: Option<Duration>,
+    ) -> Self {
         let base_url = base_url.trim_end_matches('/');
         let mut headers = header::HeaderMap::new();
         if let Some(key) = api_key {
@@ -69,8 +82,15 @@ impl LlmProxy {
             value.set_sensitive(true);
             headers.append(header::AUTHORIZATION, value);
         }
+        let client = Client::builder()
+            .default_headers(headers)
+            .connect_timeout(connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT))
+            .read_timeout(read_timeout.unwrap_or(DEFAULT_READ_TIMEOUT))
+            .timeout(total_timeout.unwrap_or(DEFAULT_TOTAL_TIMEOUT))
+            .build()
+            .unwrap();
         Self {
-            client: Client::builder().default_headers(headers).build().unwrap(),
+            client,
             base_url: base_url.to_owned(),
         }
     }
@@ -200,7 +220,10 @@ async fn main() -> Result<()> {
         },
     };
 
-    let model_gateway = LlmProxy::new(base_url.as_str(), api_key.as_deref());
+    let model_gateway = LlmProxy::builder()
+        .base_url(&base_url)
+        .maybe_api_key(api_key.as_deref())
+        .build();
 
     event!(
         Level::INFO,

@@ -4,5 +4,5 @@ A super-lightweight LLM proxy for OpenAI-compatible providers. Only supports the
 
 ## To Do
 
-* [_] Connection timeout
-* [_] Response timeout
+* [x] Connection timeout
+* [x] Response timeout
