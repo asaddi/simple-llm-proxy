@@ -34,6 +34,7 @@ struct ModelConfig {
 pub struct ProcessedConfig {
     provider_map: HashMap<String, ProviderConfig>,
     model_map: HashMap<String, ModelConfig>,
+    models: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -70,15 +71,19 @@ impl Config {
             }
         }
         let mut model_map = HashMap::new();
+        let mut models = Vec::new();
         for m in &self.models {
             if model_map.insert(m.name.clone(), m.clone()).is_some() {
                 event!(Level::WARN, "duplicate model '{}'; later one wins", m.name);
+            } else {
+                models.push(m.name.clone());
             }
         }
 
         ProcessedConfig {
             provider_map,
             model_map,
+            models,
         }
     }
 }
@@ -96,8 +101,8 @@ fn resolve_api_key(key: &str) -> String {
 }
 
 impl ProcessedConfig {
-    pub fn get_models(&self) -> Vec<&String> {
-        Vec::from_iter(self.model_map.keys())
+    pub fn get_models(&self) -> Vec<String> {
+        self.models.clone()
     }
 
     pub fn get_target(&self, model: &str) -> Option<ModelTarget> {
