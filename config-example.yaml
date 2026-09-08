@@ -1,0 +1,24 @@
+# Optional timeouts (in seconds) when communicating with a provider
+#connect_timeout: 30
+#read_timeout: 60
+#total_timeout: 600
+
+providers:
+  - name: llama.cpp
+    base_url: http://localhost:8080/v1
+    #api_key is optional
+
+  - name: OpenRouter
+    base_url: https://openrouter.ai/api/v1
+    api_key: sk-or-v1-xxx
+    # Or retrieve it from the specified environment variable
+    #api_key: env:OPENROUTER_API_KEY
+
+models:
+  - name: Local Model
+    provider: llama.cpp
+    model: whatever
+
+  - name: Qwen3.8 27b
+    provider: OpenRouter
+    model: qwen/qwen3.8-27b

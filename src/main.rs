@@ -3,7 +3,7 @@
 use std::{
     collections::HashSet,
     sync::{Arc, LazyLock},
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use anyhow::Result;
@@ -17,13 +17,16 @@ use axum::{
 };
 use bon::bon;
 use clap::Parser;
-use reqwest::{Client, StatusCode, header};
+use reqwest::{Client, RequestBuilder, StatusCode, header};
 use serde_json::{Value, json};
 use tracing::{Level, event};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
 
-const DEFAULT_BASE_URL: &str = "http://localhost:8080/v1";
+use crate::config::{Config, ProcessedConfig};
+
+mod config;
+
 const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_READ_TIMEOUT: Duration = Duration::from_mins(5);
 const DEFAULT_TOTAL_TIMEOUT: Duration = Duration::from_mins(10);
@@ -48,57 +51,62 @@ struct Args {
     host: String,
     #[arg(long, default_value = "3000")]
     port: u16,
-    #[arg(long)]
-    base_url: Option<String>,
-    #[arg(long)]
-    base_url_env: Option<String>,
-    #[arg(long)]
-    api_key: Option<String>,
-    #[arg(long)]
-    api_key_env: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct LlmProxy {
     client: Client,
-    base_url: String,
+    config: ProcessedConfig,
+    start_time: Duration,
+}
+
+trait RequestBuilderExt {
+    fn maybe_bearer_auth(self, token: Option<&str>) -> RequestBuilder;
+}
+
+impl RequestBuilderExt for RequestBuilder {
+    fn maybe_bearer_auth(self, token: Option<&str>) -> RequestBuilder {
+        if let Some(tok) = token {
+            self.bearer_auth(tok)
+        } else {
+            self
+        }
+    }
 }
 
 #[bon]
 impl LlmProxy {
     #[builder]
     fn new(
-        base_url: &str,
-        api_key: Option<&str>,
+        config: Config,
         connect_timeout: Option<Duration>,
         read_timeout: Option<Duration>,
         total_timeout: Option<Duration>,
     ) -> Self {
-        let base_url = base_url.trim_end_matches('/');
-        let mut headers = header::HeaderMap::new();
-        if let Some(key) = api_key {
-            let mut value =
-                header::HeaderValue::from_str(format!("Bearer {key}").as_str()).unwrap();
-            value.set_sensitive(true);
-            headers.append(header::AUTHORIZATION, value);
-        }
         let client = Client::builder()
-            .default_headers(headers)
             .connect_timeout(connect_timeout.unwrap_or(DEFAULT_CONNECT_TIMEOUT))
             .read_timeout(read_timeout.unwrap_or(DEFAULT_READ_TIMEOUT))
             .timeout(total_timeout.unwrap_or(DEFAULT_TOTAL_TIMEOUT))
             .build()
             .unwrap();
+
+        let processed_config = config.process_config();
+
+        let epoch_time = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap();
+
         Self {
             client,
-            base_url: base_url.to_owned(),
+            config: processed_config,
+            start_time: epoch_time,
         }
     }
 
-    fn endpoint(&self, path: &str) -> String {
+    fn endpoint(base_url: &str, path: &str) -> String {
         // TODO there's probably a way to ensure the result is still valid
         let mut result = String::new();
-        result.push_str(&self.base_url);
+        result.push_str(base_url);
         result.push_str(path);
         result
     }
@@ -118,50 +126,110 @@ impl LlmProxy {
             .unwrap()
     }
 
-    async fn post_proxy(&self, path: &str, Json(payload): Json<Value>) -> Result<Response<Body>> {
+    async fn post_proxy(
+        &self,
+        base_url: &str,
+        api_key: Option<&str>,
+        path: &str,
+        Json(payload): Json<Value>,
+    ) -> Result<Response<Body>> {
+        event!(Level::DEBUG, "proxying POST to {base_url} {path}");
         let orig_resp = self
             .client
-            .post(self.endpoint(path))
+            .post(LlmProxy::endpoint(base_url, path))
+            .maybe_bearer_auth(api_key)
             .json(&payload)
             .send()
             .await?;
         Ok(Self::make_proxy_response(orig_resp))
     }
 
-    async fn get_proxy(&self, path: &str) -> Result<Response<Body>> {
-        let orig_resp = self.client.get(self.endpoint(path)).send().await?;
+    #[allow(dead_code)]
+    async fn get_proxy(
+        &self,
+        base_url: &str,
+        api_key: Option<&str>,
+        path: &str,
+    ) -> Result<Response<Body>> {
+        let orig_resp = self
+            .client
+            .get(LlmProxy::endpoint(base_url, path))
+            .maybe_bearer_auth(api_key)
+            .send()
+            .await?;
         Ok(Self::make_proxy_response(orig_resp))
+    }
+
+    fn bad_request(message: &str) -> Response<Body> {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error":{"message":message}})),
+        )
+            .into_response()
     }
 
     async fn chat_handler(
         State(state): State<Arc<LlmProxy>>,
-        Json(payload): Json<Value>,
+        Json(mut payload): Json<Value>,
     ) -> Response<Body> {
-        match state.post_proxy("/chat/completions", Json(payload)).await {
-            Ok(resp) => resp,
-            Err(e) => {
-                event!(Level::ERROR, "streaming_aware_proxy failed: {e}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error":{"message":e.to_string()}})).into_response(),
-                )
-                    .into_response()
+        if let Some(requested_model) = payload.get("model") {
+            if let Some(model) = requested_model.as_str() {
+                if let Some(model_target) = state.config.get_target(model) {
+                    let payload_map = payload.as_object_mut().unwrap(); // FIXME shouldn't be unwrap
+                    payload_map.insert("model".to_owned(), Value::String(model_target.model));
+                    let new_payload = Value::Object(payload_map.clone());
+                    match state
+                        .post_proxy(
+                            &model_target.base_url,
+                            model_target.api_key.as_deref(),
+                            "/chat/completions",
+                            Json(new_payload),
+                        )
+                        .await
+                    {
+                        Ok(resp) => resp,
+                        Err(e) => {
+                            event!(Level::ERROR, "post_proxy failed: {e}");
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                Json(json!({"error":{"message":e.to_string()}})).into_response(),
+                            )
+                                .into_response()
+                        }
+                    }
+                } else {
+                    LlmProxy::bad_request("unknown model")
+                }
+            } else {
+                LlmProxy::bad_request("bad model")
             }
+        } else {
+            LlmProxy::bad_request("missing model")
         }
     }
 
-    async fn model_handler(State(state): State<Arc<LlmProxy>>) -> Response<Body> {
-        match state.get_proxy("/models").await {
-            Ok(resp) => resp,
-            Err(e) => {
-                event!(Level::ERROR, "model_handler failed: {e}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(json!({"error":{"message":e.to_string()}})).into_response(),
-                )
-                    .into_response()
-            }
+    fn model_handler(
+        State(state): State<Arc<LlmProxy>>,
+    ) -> impl std::future::Future<Output = Response<Body>> {
+        let mut resp_map = serde_json::Map::new();
+        resp_map.insert("object".to_owned(), Value::String("list".to_owned()));
+
+        let mut models = Vec::new();
+        for m in state.config.get_models() {
+            let mut model_map = serde_json::Map::new();
+            model_map.insert("id".to_owned(), Value::String(m.clone()));
+            model_map.insert("object".to_owned(), Value::String("model".to_owned()));
+            model_map.insert("created".to_owned(), json!(state.start_time.as_secs())); // FIXME
+            model_map.insert(
+                "owned_by".to_owned(),
+                Value::String("simple-llm-proxy".to_owned()),
+            ); // FIXME
+            models.push(Value::Object(model_map));
         }
+
+        resp_map.insert("data".to_owned(), Value::Array(models));
+
+        std::future::ready(Json(Value::Object(resp_map)).into_response())
     }
 }
 
@@ -204,32 +272,23 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     let bind_addr = format!("{}:{}", args.host, args.port);
 
-    let base_url = match args.base_url {
-        Some(val) => val,
-        None => match args.base_url_env {
-            Some(var) => std::env::var(var)?,
-            None => DEFAULT_BASE_URL.to_owned(),
-        },
-    };
+    let config = Config::load("config.yaml")?;
 
-    let api_key = match args.api_key {
-        Some(val) => Some(val),
-        None => match args.api_key_env {
-            Some(var) => Some(std::env::var(var)?),
-            None => None,
-        },
-    };
+    event!(Level::INFO, "Listening on {bind_addr}");
+    event!(
+        Level::DEBUG,
+        "connect/read/total timeouts: {:?}/{:?}/{:?}",
+        config.connect_timeout,
+        config.read_timeout,
+        config.total_timeout
+    );
 
     let model_gateway = LlmProxy::builder()
-        .base_url(&base_url)
-        .maybe_api_key(api_key.as_deref())
+        .maybe_connect_timeout(config.connect_timeout.map(Duration::from_secs))
+        .maybe_read_timeout(config.read_timeout.map(Duration::from_secs))
+        .maybe_total_timeout(config.total_timeout.map(Duration::from_secs))
+        .config(config)
         .build();
-
-    event!(
-        Level::INFO,
-        "Listening on {bind_addr}; forwarding to {}",
-        &model_gateway.base_url
-    );
 
     let shared_model_gateway = Arc::new(model_gateway);
 
