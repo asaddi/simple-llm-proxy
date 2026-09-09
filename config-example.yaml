@@ -24,7 +24,7 @@ models:
     model: qwen/qwen3.8-27b
 
 # Optionally require clients to authorize via an (opaque) bearer token
-#require_auth:
+#request_auth:
 #  - id: someclient
 #    token: thisbetterbearandomstring
 #  - id: anotherclient
