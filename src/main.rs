@@ -10,14 +10,16 @@ use anyhow::Result;
 use axum::{
     Json, Router,
     body::Body,
-    extract::State,
-    http::{HeaderName, Response},
-    response::IntoResponse,
+    extract::{Request, State},
+    http::HeaderName,
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use bon::bon;
 use clap::Parser;
-use reqwest::{Client, RequestBuilder, StatusCode, header};
+use reqwest::header::{self};
+use reqwest::{Client, RequestBuilder, StatusCode};
 use serde_json::{Value, json};
 use tracing::{Level, event};
 use tracing_subscriber::prelude::*;
@@ -111,7 +113,7 @@ impl LlmProxy {
         result
     }
 
-    fn make_proxy_response(orig_resp: reqwest::Response) -> Response<Body> {
+    fn make_proxy_response(orig_resp: reqwest::Response) -> Response {
         let mut resp_builder = Response::builder().status(orig_resp.status());
         {
             let headers = resp_builder.headers_mut().unwrap();
@@ -132,7 +134,7 @@ impl LlmProxy {
         api_key: Option<&str>,
         path: &str,
         Json(payload): Json<Value>,
-    ) -> Result<Response<Body>> {
+    ) -> Result<Response> {
         event!(Level::DEBUG, "proxying POST to {base_url} {path}");
         let orig_resp = self
             .client
@@ -150,7 +152,7 @@ impl LlmProxy {
         base_url: &str,
         api_key: Option<&str>,
         path: &str,
-    ) -> Result<Response<Body>> {
+    ) -> Result<Response> {
         let orig_resp = self
             .client
             .get(LlmProxy::endpoint(base_url, path))
@@ -160,7 +162,7 @@ impl LlmProxy {
         Ok(Self::make_proxy_response(orig_resp))
     }
 
-    fn bad_request(message: &str) -> Response<Body> {
+    fn bad_request(message: &str) -> Response {
         (
             StatusCode::BAD_REQUEST,
             Json(json!({"error":{"message":message}})),
@@ -171,7 +173,7 @@ impl LlmProxy {
     async fn chat_handler(
         State(state): State<Arc<LlmProxy>>,
         Json(mut payload): Json<Value>,
-    ) -> Response<Body> {
+    ) -> Response {
         if let Some(requested_model) = payload.get("model") {
             if let Some(model) = requested_model.as_str() {
                 if let Some(model_target) = state.config.get_target(model) {
@@ -210,7 +212,7 @@ impl LlmProxy {
 
     fn model_handler(
         State(state): State<Arc<LlmProxy>>,
-    ) -> impl std::future::Future<Output = Response<Body>> {
+    ) -> impl std::future::Future<Output = Response> {
         let mut resp_map = serde_json::Map::new();
         resp_map.insert("object".to_owned(), Value::String("list".to_owned()));
 
@@ -230,6 +232,18 @@ impl LlmProxy {
         resp_map.insert("data".to_owned(), Value::Array(models));
 
         std::future::ready(Json(Value::Object(resp_map)).into_response())
+    }
+
+    fn check_auth<B>(&self, request: &Request<B>) -> impl Future<Output = bool> {
+        let token = if let Some(maybe_token) = request.headers().get(header::AUTHORIZATION) {
+            match maybe_token.to_str() {
+                Ok(header) => header.strip_prefix("Bearer ").map(str::trim),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+        std::future::ready(self.config.auth_check(token))
     }
 }
 
@@ -254,6 +268,22 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => {},
         () = terminate => {},
+    }
+}
+
+async fn my_auth_middleware(
+    State(state): State<Arc<LlmProxy>>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if state.check_auth(&request).await {
+        next.run(request).await
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({"error":{"message":"unauthorized"}})),
+        )
+            .into_response()
     }
 }
 
@@ -295,6 +325,10 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/v1/models", get(LlmProxy::model_handler))
         .route("/v1/chat/completions", post(LlmProxy::chat_handler))
+        .layer(middleware::from_fn_with_state(
+            shared_model_gateway.clone(),
+            my_auth_middleware,
+        ))
         .with_state(shared_model_gateway);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;

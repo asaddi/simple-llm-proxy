@@ -14,6 +14,8 @@ pub struct Config {
 
     providers: Vec<ProviderConfig>,
     models: Vec<ModelConfig>,
+
+    request_auth: Option<Vec<AuthToken>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -30,11 +32,19 @@ struct ModelConfig {
     model: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+struct AuthToken {
+    id: String,
+    token: String,
+}
+
 #[derive(Debug)]
 pub struct ProcessedConfig {
     provider_map: HashMap<String, ProviderConfig>,
     model_map: HashMap<String, ModelConfig>,
     models: Vec<String>,
+
+    auth_tokens: HashMap<String, String>,
 }
 
 #[derive(Debug)]
@@ -80,10 +90,18 @@ impl Config {
             }
         }
 
+        let mut auth_tokens = HashMap::new();
+        for a in &self.request_auth.unwrap_or_default() {
+            if auth_tokens.insert(a.token.clone(), a.id.clone()).is_some() {
+                event!(Level::WARN, "duplicate auth token with id '{}'", a.id);
+            }
+        }
+
         ProcessedConfig {
             provider_map,
             model_map,
             models,
+            auth_tokens,
         }
     }
 }
@@ -120,6 +138,23 @@ impl ProcessedConfig {
             })
         } else {
             None
+        }
+    }
+
+    pub fn auth_check(&self, token: Option<&str>) -> bool {
+        if self.auth_tokens.is_empty() {
+            // No tokens defined, everyone's allowed
+            true
+        } else {
+            token.is_some_and(|tok| {
+                if let Some(id) = self.auth_tokens.get(tok) {
+                    event!(Level::DEBUG, "authorized token id {id}");
+                    true
+                } else {
+                    event!(Level::TRACE, "not authorized");
+                    false
+                }
+            })
         }
     }
 }
