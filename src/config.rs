@@ -92,7 +92,8 @@ impl Config {
 
         let mut auth_tokens = HashMap::new();
         for a in &self.request_auth.unwrap_or_default() {
-            if auth_tokens.insert(a.token.clone(), a.id.clone()).is_some() {
+            let token = resolve_api_key(a.token.as_str());
+            if auth_tokens.insert(token, a.id.clone()).is_some() {
                 event!(Level::WARN, "duplicate auth token with id '{}'", a.id);
             }
         }
