@@ -6,7 +6,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use axum::{
     Json, Router,
     body::Body,
@@ -25,7 +25,7 @@ use tracing::{Level, event};
 use tracing_subscriber::prelude::*;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use crate::config::{Config, ProcessedConfig};
+use crate::config::{Config, ModelTarget, ProcessedConfig};
 
 mod config;
 
@@ -170,43 +170,48 @@ impl LlmProxy {
             .into_response()
     }
 
+    fn remap_model(&self, input: &mut Value) -> Result<(ModelTarget, Value)> {
+        if let Some(model_target) = input
+            .get("model")
+            .and_then(|m| m.as_str().and_then(|mt| self.config.get_target(mt)))
+        {
+            let input_map = input.as_object_mut().unwrap();
+            input_map.insert(
+                "model".to_owned(),
+                Value::String(model_target.model.clone()),
+            );
+            let output = Value::Object(input_map.clone());
+            Ok((model_target, output))
+        } else {
+            bail!("error mapping model")
+        }
+    }
+
     async fn chat_handler(
         State(state): State<Arc<LlmProxy>>,
         Json(mut payload): Json<Value>,
     ) -> Response {
-        if let Some(requested_model) = payload.get("model") {
-            if let Some(model) = requested_model.as_str() {
-                if let Some(model_target) = state.config.get_target(model) {
-                    let payload_map = payload.as_object_mut().unwrap(); // FIXME shouldn't be unwrap
-                    payload_map.insert("model".to_owned(), Value::String(model_target.model));
-                    let new_payload = Value::Object(payload_map.clone());
-                    match state
-                        .post_proxy(
-                            &model_target.base_url,
-                            model_target.api_key.as_deref(),
-                            "/chat/completions",
-                            Json(new_payload),
-                        )
-                        .await
-                    {
-                        Ok(resp) => resp,
-                        Err(e) => {
-                            event!(Level::ERROR, "post_proxy failed: {e}");
-                            (
-                                StatusCode::INTERNAL_SERVER_ERROR,
-                                Json(json!({"error":{"message":e.to_string()}})).into_response(),
-                            )
-                                .into_response()
-                        }
-                    }
-                } else {
-                    LlmProxy::bad_request("unknown model")
+        match state.remap_model(&mut payload) {
+            Ok((model_target, new_payload)) => match state
+                .post_proxy(
+                    &model_target.base_url,
+                    model_target.api_key.as_deref(),
+                    "/chat/completions",
+                    Json(new_payload),
+                )
+                .await
+            {
+                Ok(resp) => resp,
+                Err(e) => {
+                    event!(Level::ERROR, "post_proxy failed: {e}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error":{"message":e.to_string()}})).into_response(),
+                    )
+                        .into_response()
                 }
-            } else {
-                LlmProxy::bad_request("bad model")
-            }
-        } else {
-            LlmProxy::bad_request("missing model")
+            },
+            Err(e) => LlmProxy::bad_request(&e.to_string()),
         }
     }
 
