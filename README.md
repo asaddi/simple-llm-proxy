@@ -14,3 +14,4 @@ A super-lightweight LLM proxy for OpenAI-compatible providers. Only supports the
 * [_] Dynamic mapping of models. Out of scope? Something like "map all models from this provider by adding a prefix to their model names"
 * [_] Better HTTP status responses (e.g. 502, 503, 504 may be applicable for some cases, rather than the generic 500)
 * [_] Basic retry with backoff and maybe jitter when contacting providers (e.g. for some 4xx's, like 408, 429, maybe 425, and most 5xx's mentioned above)
+* [_] Basic Responses API proxying. "Model" will need to be remapped (both between virtual & real and vice-versa) from endpoints such as: `POST /responses`, `GET /responses/xxx`, `POST /responses/input_tokens`, `POST /responses/xxx/cancel`, `POST /responses/compact`
