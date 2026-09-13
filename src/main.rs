@@ -250,15 +250,12 @@ impl LlmProxy {
         std::future::ready(Json(Value::Object(resp_map)).into_response())
     }
 
-    fn check_auth<B>(&self, request: &Request<B>) -> impl Future<Output = bool> {
-        let token = if let Some(maybe_token) = request.headers().get(header::AUTHORIZATION) {
-            match maybe_token.to_str() {
-                Ok(header) => header.strip_prefix("Bearer ").map(str::trim),
-                Err(_) => None,
-            }
-        } else {
-            None
-        };
+    fn check_auth(&self, request: &Request) -> impl Future<Output = bool> {
+        let token = request
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|header| header.strip_prefix("Bearer ").map(str::trim));
         std::future::ready(self.config.auth_check(token))
     }
 }
