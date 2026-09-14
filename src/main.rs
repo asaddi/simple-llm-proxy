@@ -198,16 +198,13 @@ impl LlmProxy {
         }
     }
 
-    async fn chat_handler(
-        State(state): State<Arc<LlmProxy>>,
-        Json(mut payload): Json<Value>,
-    ) -> Response {
-        match state.remap_model(&mut payload) {
-            Ok((model_target, new_payload)) => match state
+    async fn post_handler(&self, mut payload: Value, endpoint: &str) -> Response {
+        match self.remap_model(&mut payload) {
+            Ok((model_target, new_payload)) => match self
                 .post_proxy(
                     &model_target.base_url,
                     model_target.api_key.as_deref(),
-                    "/chat/completions",
+                    endpoint,
                     Json(new_payload),
                 )
                 .await
@@ -224,6 +221,20 @@ impl LlmProxy {
             },
             Err(e) => LlmProxy::bad_request(&e.to_string()),
         }
+    }
+
+    async fn completions_handler(
+        State(state): State<Arc<LlmProxy>>,
+        Json(payload): Json<Value>,
+    ) -> Response {
+        state.post_handler(payload, "/completions").await
+    }
+
+    async fn chat_handler(
+        State(state): State<Arc<LlmProxy>>,
+        Json(payload): Json<Value>,
+    ) -> Response {
+        state.post_handler(payload, "/chat/completions").await
     }
 
     fn model_handler(
@@ -337,6 +348,7 @@ async fn main() -> Result<()> {
 
     let app = Router::new()
         .route("/v1/models", get(LlmProxy::model_handler))
+        .route("/v1/completions", post(LlmProxy::completions_handler))
         .route("/v1/chat/completions", post(LlmProxy::chat_handler))
         .layer(middleware::from_fn_with_state(
             shared_model_gateway.clone(),
