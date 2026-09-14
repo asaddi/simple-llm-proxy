@@ -239,6 +239,44 @@ impl LlmProxy {
         state.post_handler(payload, "/chat/completions").await
     }
 
+    // TODO possibly unfinished, see further in
+    async fn responses_handler(
+        State(state): State<Arc<LlmProxy>>,
+        Json(mut payload): Json<Value>,
+    ) -> Response {
+        match state.remap_model(&mut payload) {
+            Ok((model_target, new_payload, _received_model)) => match state
+                .post_proxy(
+                    &model_target.base_url,
+                    model_target.api_key.as_deref(),
+                    "/responses",
+                    Json(new_payload),
+                )
+                .await
+            {
+                Ok(resp) => {
+                    // TODO Swap received_model back into the response.
+                    // Though does it really matter? Would clients care?
+                    // Unfortunately, the possibility of streaming makes
+                    // this a far more difficult problem.
+                    // (Because each "data" event is a JSON response with
+                    // the final one most likely containing the model.)
+                    // We would need full SSE parsing.
+                    resp
+                }
+                Err(e) => {
+                    event!(Level::ERROR, "post_proxy failed: {e}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(json!({"error":{"message":e.to_string()}})).into_response(),
+                    )
+                        .into_response()
+                }
+            },
+            Err(e) => LlmProxy::bad_request(&e.to_string()),
+        }
+    }
+
     fn model_handler(
         State(state): State<Arc<LlmProxy>>,
     ) -> impl std::future::Future<Output = Response> {
@@ -352,6 +390,7 @@ async fn main() -> Result<()> {
         .route("/v1/models", get(LlmProxy::model_handler))
         .route("/v1/completions", post(LlmProxy::completions_handler))
         .route("/v1/chat/completions", post(LlmProxy::chat_handler))
+        .route("/v1/responses", post(LlmProxy::responses_handler))
         .layer(middleware::from_fn_with_state(
             shared_model_gateway.clone(),
             my_auth_middleware,
