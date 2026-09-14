@@ -181,26 +181,28 @@ impl LlmProxy {
             .into_response()
     }
 
-    fn remap_model(&self, input: &mut Value) -> Result<(ModelTarget, Value)> {
-        if let Some(model_target) = input
-            .get("model")
-            .and_then(|m| m.as_str().and_then(|mt| self.config.get_target(mt)))
-        {
-            let input_map = input.as_object_mut().unwrap();
-            input_map.insert(
-                "model".to_owned(),
-                Value::String(model_target.model.clone()),
-            );
-            let output = Value::Object(input_map.clone());
-            Ok((model_target, output))
+    fn remap_model(&self, input: &mut Value) -> Result<(ModelTarget, Value, String)> {
+        if let Some(json_model) = &mut input.get("model").and_then(|m| m.as_str()) {
+            let received_model = json_model.to_owned();
+            if let Some(model_target) = self.config.get_target(&received_model) {
+                let input_map = input.as_object_mut().unwrap();
+                input_map.insert(
+                    "model".to_owned(),
+                    Value::String(model_target.model.clone()),
+                );
+                let output = Value::Object(input_map.clone());
+                Ok((model_target, output, received_model))
+            } else {
+                bail!("unknown model")
+            }
         } else {
-            bail!("error mapping model")
+            bail!("missing model")
         }
     }
 
     async fn post_handler(&self, mut payload: Value, endpoint: &str) -> Response {
         match self.remap_model(&mut payload) {
-            Ok((model_target, new_payload)) => match self
+            Ok((model_target, new_payload, _received_model)) => match self
                 .post_proxy(
                     &model_target.base_url,
                     model_target.api_key.as_deref(),
