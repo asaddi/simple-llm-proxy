@@ -1,0 +1,7 @@
+---
+source: src/config.rs
+expression: "&processed.get_target(\"remote/model\").unwrap()"
+---
+base_url: "https://example.com/v1"
+api_key: sk-12345
+model: other-model

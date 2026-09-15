@@ -38,7 +38,7 @@ struct AuthToken {
     token: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct ProcessedConfig {
     provider_map: HashMap<String, ProviderConfig>,
     model_map: HashMap<String, ModelConfig>,
@@ -47,7 +47,7 @@ pub struct ProcessedConfig {
     auth_tokens: HashMap<String, String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub struct ModelTarget {
     pub base_url: String,
     pub api_key: Option<String>,
@@ -107,6 +107,48 @@ impl Config {
     }
 }
 
+#[test]
+#[should_panic(expected = "Environment variable 'DUMMY_API_KEY'")]
+fn test_missing_env() {
+    let config = Config::load("test/config-basic.yaml").unwrap();
+    temp_env::with_var_unset("DUMMY_API_KEY", || {
+        let _ = config.process_config();
+    });
+}
+
+#[test]
+fn test_basic_env() {
+    let config = Config::load("test/config-basic.yaml").unwrap();
+    temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+        let processed = config.process_config();
+        insta::assert_yaml_snapshot!(processed, {
+            ".provider_map" => insta::sorted_redaction(),
+            ".model_map" => insta::sorted_redaction(),
+            ".models" => insta::sorted_redaction(),
+        });
+    });
+}
+
+#[test]
+fn test_auth_tokens() {
+    let config = Config::load("test/config-auth.yaml").unwrap();
+    temp_env::with_vars(
+        [
+            ("DUMMY_API_KEY", Some("sk-54321")),
+            ("MY_ENV_TOKEN", Some("my-98765")),
+        ],
+        || {
+            let processed = config.process_config();
+            insta::assert_yaml_snapshot!(processed, {
+                ".provider_map" => insta::sorted_redaction(),
+                ".model_map" => insta::sorted_redaction(),
+                ".models" => insta::sorted_redaction(),
+                ".auth_tokens" => insta::sorted_redaction(),
+            });
+        },
+    );
+}
+
 fn resolve_api_key(key: &str) -> String {
     let lower = key.to_lowercase();
     if lower.starts_with("env:") {
@@ -158,4 +200,64 @@ impl ProcessedConfig {
             })
         }
     }
+}
+
+#[test]
+fn test_get_models() {
+    let config = Config::load("test/config-basic.yaml").unwrap();
+    temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+        let processed = config.process_config();
+        insta::assert_yaml_snapshot!(&processed.get_models(), {
+            "." => insta::sorted_redaction(),
+        });
+    });
+}
+
+#[test]
+fn test_get_target_found() {
+    let config = Config::load("test/config-basic.yaml").unwrap();
+    temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+        let processed = config.process_config();
+        insta::assert_yaml_snapshot!(&processed.get_target("local/model").unwrap());
+        insta::assert_yaml_snapshot!(&processed.get_target("remote/model").unwrap());
+    });
+}
+
+#[test]
+fn test_get_target_not_found() {
+    let config = Config::load("test/config-basic.yaml").unwrap();
+    temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+        let processed = config.process_config();
+        assert!(processed.get_target("somerandommodel").is_none());
+    });
+}
+
+#[test]
+fn test_auth_check_not_required() {
+    let config = Config::load("test/config-basic.yaml").unwrap();
+    temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+        let processed = config.process_config();
+        assert!(processed.auth_check(None));
+        assert!(processed.auth_check(Some("my-invalid-key")));
+        assert!(processed.auth_check(Some("my-12345")));
+        assert!(processed.auth_check(Some("my-98765")));
+    });
+}
+
+#[test]
+fn test_auth_check_required() {
+    let config = Config::load("test/config-auth.yaml").unwrap();
+    temp_env::with_vars(
+        [
+            ("DUMMY_API_KEY", Some("sk-54321")),
+            ("MY_ENV_TOKEN", Some("my-98765")),
+        ],
+        || {
+            let processed = config.process_config();
+            assert!(!processed.auth_check(None));
+            assert!(!processed.auth_check(Some("my-invalid-key")));
+            assert!(processed.auth_check(Some("my-12345")));
+            assert!(processed.auth_check(Some("my-98765")));
+        },
+    );
 }

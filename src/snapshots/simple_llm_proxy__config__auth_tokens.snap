@@ -1,0 +1,32 @@
+---
+source: src/config.rs
+expression: processed
+---
+provider_map:
+  dummy:
+    name: dummy
+    base_url: "https://example.com/v1"
+    api_key: sk-12345
+  dummy_env:
+    name: dummy_env
+    base_url: "https://example.com/v1"
+    api_key: sk-54321
+  llama.cpp:
+    name: llama.cpp
+    base_url: "http://localhost:8080/v1"
+    api_key: ~
+model_map:
+  local/model:
+    name: local/model
+    provider: llama.cpp
+    model: whatever
+  remote/model:
+    name: remote/model
+    provider: dummy
+    model: other-model
+models:
+  - local/model
+  - remote/model
+auth_tokens:
+  my-12345: dummytoken
+  my-98765: envtoken

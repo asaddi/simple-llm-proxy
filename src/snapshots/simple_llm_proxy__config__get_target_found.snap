@@ -1,0 +1,7 @@
+---
+source: src/config.rs
+expression: "&processed.get_target(\"local/model\").unwrap()"
+---
+base_url: "http://localhost:8080/v1"
+api_key: ~
+model: whatever

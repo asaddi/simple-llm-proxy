@@ -1,0 +1,6 @@
+---
+source: src/config.rs
+expression: "&processed.get_models()"
+---
+- local/model
+- remote/model
