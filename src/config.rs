@@ -15,7 +15,7 @@ pub struct Config {
     providers: Vec<ProviderConfig>,
     models: Vec<ModelConfig>,
 
-    request_auth: Option<Vec<AuthToken>>,
+    require_auth: Option<Vec<AuthToken>>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -91,7 +91,7 @@ impl Config {
         }
 
         let mut auth_tokens = HashMap::new();
-        for a in &self.request_auth.unwrap_or_default() {
+        for a in &self.require_auth.unwrap_or_default() {
             let token = resolve_api_key(a.token.as_str());
             if auth_tokens.insert(token, a.id.clone()).is_some() {
                 event!(Level::WARN, "duplicate auth token with id '{}'", a.id);

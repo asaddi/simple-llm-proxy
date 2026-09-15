@@ -19,7 +19,7 @@ models:
       provider: dummy
       model: other-model
 
-request_auth:
+require_auth:
     - id: dummytoken
       token: my-12345
     - id: envtoken
