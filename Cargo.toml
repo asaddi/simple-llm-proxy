@@ -1,7 +1,11 @@
 [package]
 name = "simple-llm-proxy"
 version = "0.1.0"
+authors = ["Allan Saddi <allan@saddi.com>"]
 edition = "2024"
+description = "A super-lightweight LLM proxy for OpenAI-compatible providers"
+readme = "README.md"
+license = "MIT"
 
 [dependencies]
 anyhow = "1.0"
