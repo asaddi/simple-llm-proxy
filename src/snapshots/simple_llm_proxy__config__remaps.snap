@@ -2,7 +2,21 @@
 source: src/config.rs
 expression: processed
 ---
-remaps: []
+remaps:
+  - prefix: remote/
+    provider: dummy
+    base_url: "https://example.com/v1"
+    api_key: sk-12345
+    models:
+      models: []
+      model_map: {}
+  - prefix: remote2/
+    provider: dummy
+    base_url: "https://example.com/v1"
+    api_key: sk-12345
+    models:
+      models: []
+      model_map: {}
 auth_tokens: {}
 config_models:
   models:

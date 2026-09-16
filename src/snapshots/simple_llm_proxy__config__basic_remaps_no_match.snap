@@ -2,7 +2,26 @@
 source: src/config.rs
 expression: processed
 ---
-remaps: []
+remaps:
+  - prefix: remote/
+    provider: dummy
+    base_url: "https://example.com/v1"
+    api_key: sk-12345
+    models:
+      models: []
+      model_map: {}
+  - prefix: remote2/
+    provider: dummy
+    base_url: "https://example.com/v1"
+    api_key: sk-12345
+    models:
+      models:
+        - remote2/nofilter
+      model_map:
+        remote2/nofilter:
+          base_url: "https://example.com/v1"
+          api_key: sk-12345
+          model: nofilter
 auth_tokens: {}
 config_models:
   models:
@@ -21,6 +40,7 @@ all_models:
   models:
     - local/model
     - remote/model
+    - remote2/nofilter
   model_map:
     local/model:
       base_url: "http://localhost:8080/v1"
@@ -30,3 +50,7 @@ all_models:
       base_url: "https://example.com/v1"
       api_key: sk-12345
       model: other-model
+    remote2/nofilter:
+      base_url: "https://example.com/v1"
+      api_key: sk-12345
+      model: nofilter

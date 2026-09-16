@@ -23,6 +23,14 @@ models:
     provider: OpenRouter
     model: qwen/qwen3.8-27b
 
+remap:
+  - prefix: openrouter/
+    provider: OpenRouter
+    # The following is optional
+    filter:
+      - "^qwen/qwen3\\.8"
+      - "^z-ai/glm-5\\.3"
+
 # Optionally require clients to authorize via an (opaque) bearer token
 #require_auth:
 #  - id: someclient

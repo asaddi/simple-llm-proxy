@@ -2,8 +2,10 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use noyalib::from_str;
+use regex::Regex;
+use serde_json::Value;
 use tracing::{Level, event};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -14,6 +16,7 @@ pub struct Config {
 
     providers: Vec<ProviderConfig>,
     models: Vec<ModelConfig>,
+    remaps: Option<Vec<RemapConfig>>,
 
     require_auth: Option<Vec<AuthToken>>,
 }
@@ -33,6 +36,13 @@ struct ModelConfig {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+struct RemapConfig {
+    prefix: String,
+    provider: String,
+    filters: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 struct AuthToken {
     id: String,
     token: String,
@@ -40,14 +50,34 @@ struct AuthToken {
 
 #[derive(Debug, serde::Serialize)]
 pub struct ProcessedConfig {
-    provider_map: HashMap<String, ProviderConfig>,
-    model_map: HashMap<String, ModelConfig>,
-    models: Vec<String>,
-
+    pub remaps: Vec<ProcessedRemap>,
     auth_tokens: HashMap<String, String>,
+    config_models: ModelMap,
+
+    // TODO does the following need to be atomic?
+    all_models: ModelMap,
 }
 
 #[derive(Debug, serde::Serialize)]
+pub struct ProcessedRemap {
+    prefix: String,
+    provider: String,
+    base_url: String,
+    api_key: Option<String>,
+    #[serde(skip)]
+    filters: Vec<Regex>,
+
+    // TODO does the following need to be atomic?
+    models: ModelMap,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct ModelMap {
+    models: Vec<String>,
+    model_map: HashMap<String, ModelTarget>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ModelTarget {
     pub base_url: String,
     pub api_key: Option<String>,
@@ -80,13 +110,32 @@ impl Config {
                 );
             }
         }
-        let mut model_map = HashMap::new();
-        let mut models = Vec::new();
-        for m in &self.models {
-            if model_map.insert(m.name.clone(), m.clone()).is_some() {
-                event!(Level::WARN, "duplicate model '{}'; later one wins", m.name);
+
+        let mut remaps = Vec::new();
+        for m in &self.remaps.unwrap_or_default() {
+            if let Some(provider_config) = provider_map.get(&m.provider) {
+                let regexps =
+                    m.filters.clone().map_or_default(|filters| {
+                        Vec::from_iter(filters.iter().map(|re| {
+                            Regex::new(re).unwrap_or_else(|_| panic!("bad regex: '{re}'"))
+                        }))
+                    });
+                let processed_remap = ProcessedRemap {
+                    prefix: m.prefix.clone(),
+                    provider: provider_config.name.clone(),
+                    base_url: provider_config.base_url.clone(),
+                    api_key: provider_config.api_key.clone(),
+                    filters: regexps,
+                    models: ModelMap::new(),
+                };
+                remaps.push(processed_remap);
             } else {
-                models.push(m.name.clone());
+                event!(
+                    Level::WARN,
+                    "remap prefix '{}' references unknown provider '{}'; ignoring",
+                    m.prefix,
+                    m.provider
+                );
             }
         }
 
@@ -98,11 +147,37 @@ impl Config {
             }
         }
 
+        let mut config_models = ModelMap::new();
+        for m in &self.models {
+            if let Some(provider_config) = provider_map.get(&m.provider) {
+                if config_models.insert(
+                    &m.name,
+                    ModelTarget {
+                        base_url: provider_config.base_url.clone(),
+                        api_key: provider_config.api_key.clone(),
+                        model: m.model.clone(),
+                    },
+                ) {
+                    event!(Level::WARN, "duplicate model '{}'; later one wins", m.name);
+                }
+            } else {
+                event!(
+                    Level::WARN,
+                    "model '{}' references unknown provider '{}'; ignoring",
+                    m.name,
+                    m.provider
+                );
+            }
+        }
+
+        // For now, it's just the configured models.
+        let all_models = config_models.clone();
+
         ProcessedConfig {
-            provider_map,
-            model_map,
-            models,
+            remaps,
             auth_tokens,
+            config_models,
+            all_models,
         }
     }
 }
@@ -122,9 +197,10 @@ fn test_basic_env() {
     temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
         let processed = config.process_config();
         insta::assert_yaml_snapshot!(processed, {
-            ".provider_map" => insta::sorted_redaction(),
-            ".model_map" => insta::sorted_redaction(),
-            ".models" => insta::sorted_redaction(),
+            ".config_models.models" => insta::sorted_redaction(),
+            ".config_models.model_map" => insta::sorted_redaction(),
+            ".all_models.models" => insta::sorted_redaction(),
+            ".all_models.model_map" => insta::sorted_redaction(),
         });
     });
 }
@@ -140,10 +216,11 @@ fn test_auth_tokens() {
         || {
             let processed = config.process_config();
             insta::assert_yaml_snapshot!(processed, {
-                ".provider_map" => insta::sorted_redaction(),
-                ".model_map" => insta::sorted_redaction(),
-                ".models" => insta::sorted_redaction(),
                 ".auth_tokens" => insta::sorted_redaction(),
+                ".config_models.models" => insta::sorted_redaction(),
+                ".config_models.model_map" => insta::sorted_redaction(),
+                ".all_models.models" => insta::sorted_redaction(),
+                ".all_models.model_map" => insta::sorted_redaction(),
             });
         },
     );
@@ -163,25 +240,11 @@ fn resolve_api_key(key: &str) -> String {
 
 impl ProcessedConfig {
     pub fn get_models(&self) -> Vec<String> {
-        self.models.clone()
+        self.all_models.models()
     }
 
     pub fn get_target(&self, model: &str) -> Option<ModelTarget> {
-        if let Some(model_config) = self.model_map.get(model) {
-            // TODO Yes, if the provider doesn't exist, that is an error condition.
-            // But maaaaybe we shouldn't crash.
-            let provider_config = self
-                .provider_map
-                .get(model_config.provider.as_str())
-                .unwrap();
-            Some(ModelTarget {
-                base_url: provider_config.base_url.clone(),
-                api_key: provider_config.api_key.clone(),
-                model: model_config.model.clone(),
-            })
-        } else {
-            None
-        }
+        self.all_models.get(model)
     }
 
     pub fn auth_check(&self, token: Option<&str>) -> bool {
@@ -199,6 +262,27 @@ impl ProcessedConfig {
                 }
             })
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn update_models(&mut self) {
+        let mut all_models = ModelMap::new();
+
+        // First, the models from prefix remaps, in order.
+        for remap in &self.remaps {
+            for remap_model in &remap.models.models {
+                let model_target = remap.models.get(remap_model).unwrap();
+                all_models.insert(remap_model, model_target);
+            }
+        }
+
+        // Then the virtual models from the config.
+        for model in &self.config_models.models {
+            let model_target = self.config_models.get(model).unwrap();
+            all_models.insert(model, model_target);
+        }
+
+        self.all_models = all_models;
     }
 }
 
@@ -260,4 +344,187 @@ fn test_auth_check_required() {
             assert!(processed.auth_check(Some("my-98765")));
         },
     );
+}
+
+impl ProcessedRemap {
+    fn is_model_selected(&self, model: &str) -> bool {
+        if self.filters.is_empty() {
+            true
+        } else {
+            self.filters.iter().any(|re| re.is_match(model))
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn populate(&mut self, source: &Value) -> Result<()> {
+        let models = source
+            .get("data")
+            .and_then(|d| d.as_array())
+            .ok_or_else(|| anyhow!("missing data array"))?;
+
+        let mut new_models = ModelMap::new();
+        for m in models {
+            let model = m
+                .get("id")
+                .and_then(|id| id.as_str())
+                .ok_or_else(|| anyhow!("missing model id"))?;
+            if self.is_model_selected(model) {
+                let mut remapped_name = String::from(&self.prefix);
+                remapped_name.push_str(model);
+
+                new_models.insert(
+                    &remapped_name,
+                    ModelTarget {
+                        base_url: self.base_url.clone(),
+                        api_key: self.api_key.clone(),
+                        model: model.to_owned(),
+                    },
+                );
+            }
+        }
+
+        self.models = new_models;
+        Ok(())
+    }
+}
+
+#[test]
+fn test_remaps() {
+    let config = Config::load("test/config-remap.yaml").unwrap();
+    let processed = config.process_config();
+    insta::assert_yaml_snapshot!(processed, {
+        ".remaps" => insta::sorted_redaction(),
+        ".config_models.models" => insta::sorted_redaction(),
+        ".config_models.model_map" => insta::sorted_redaction(),
+        ".all_models.models" => insta::sorted_redaction(),
+        ".all_models.model_map" => insta::sorted_redaction(),
+    });
+}
+
+#[test]
+fn test_is_model_selected() {
+    let config = Config::load("test/config-remap.yaml").unwrap();
+    let processed = config.process_config();
+
+    // The "remote/" remap has a filter.
+    let remap = &processed
+        .remaps
+        .iter()
+        .find(|r| r.prefix == "remote/")
+        .unwrap();
+    assert!(remap.is_model_selected("mymodel1234"));
+    assert!(!remap.is_model_selected("blahmymodel1234"));
+    assert!(!remap.is_model_selected("someothermodel"));
+
+    // The "remote2/" remap doesn't.
+    let remap = &processed
+        .remaps
+        .iter()
+        .find(|r| r.prefix == "remote2/")
+        .unwrap();
+    assert!(remap.is_model_selected("mymodel1234"));
+    assert!(remap.is_model_selected("blahmymodel1234"));
+    assert!(remap.is_model_selected("someothermodel"));
+}
+
+#[test]
+fn test_basic_remaps_no_match() {
+    let config = Config::load("test/config-remap.yaml").unwrap();
+    let mut processed = config.process_config();
+    let remap1 = &mut processed.remaps[0];
+    remap1
+        .populate(&serde_json::json!({
+            "data": [
+            {
+                "id": "blahmodel",
+                "owned_by": "meeee",
+            }
+        ]}))
+        .unwrap();
+    let remap2 = &mut processed.remaps[1];
+    remap2
+        .populate(&serde_json::json!({
+            "data": [
+            {
+                "id": "nofilter",
+                "owned_by": "meeee",
+            }
+        ]}))
+        .unwrap();
+    processed.update_models();
+    insta::assert_yaml_snapshot!(processed, {
+        ".remaps" => insta::sorted_redaction(),
+        ".config_models.models" => insta::sorted_redaction(),
+        ".config_models.model_map" => insta::sorted_redaction(),
+        ".all_models.models" => insta::sorted_redaction(),
+        ".all_models.model_map" => insta::sorted_redaction(),
+    });
+}
+
+#[test]
+fn test_basic_remaps_match() {
+    let config = Config::load("test/config-remap.yaml").unwrap();
+    let mut processed = config.process_config();
+    let remap1 = &mut processed.remaps[0];
+    remap1
+        .populate(&serde_json::json!({
+            "data": [
+                {
+                    "id": "blahmodel",
+                    "owned_by": "meeee",
+                },
+                {
+                    "id": "mymodel123",
+                    "owned_by": "meeee",
+                }
+        ]}))
+        .unwrap();
+    let remap2 = &mut processed.remaps[1];
+    remap2
+        .populate(&serde_json::json!({
+            "data": [
+            {
+                "id": "nofilter",
+                "owned_by": "meeee",
+            }
+        ]}))
+        .unwrap();
+    processed.update_models();
+    insta::assert_yaml_snapshot!(processed, {
+        ".remaps" => insta::sorted_redaction(),
+        ".config_models.models" => insta::sorted_redaction(),
+        ".config_models.model_map" => insta::sorted_redaction(),
+        ".all_models.models" => insta::sorted_redaction(),
+        ".all_models.model_map" => insta::sorted_redaction(),
+    });
+}
+
+impl ModelMap {
+    fn new() -> ModelMap {
+        Self {
+            models: Vec::new(),
+            model_map: HashMap::new(),
+        }
+    }
+
+    fn insert(&mut self, model: &str, model_target: ModelTarget) -> bool {
+        if self
+            .model_map
+            .insert(model.to_owned(), model_target)
+            .is_none()
+        {
+            self.models.push(model.to_owned());
+            false
+        } else {
+            true
+        }
+    }
+
+    fn get(&self, model: &str) -> Option<ModelTarget> {
+        self.model_map.get(model).cloned()
+    }
+
+    fn models(&self) -> Vec<String> {
+        self.models.clone()
+    }
 }

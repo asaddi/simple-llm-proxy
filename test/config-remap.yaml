@@ -1,0 +1,27 @@
+providers:
+    - name: llama.cpp
+      base_url: http://localhost:8080/v1
+
+    - name: dummy
+      base_url: https://example.com/v1
+      api_key: sk-12345
+
+models:
+    - name: local/model
+      provider: llama.cpp
+      model: whatever
+
+    - name: remote/model
+      provider: dummy
+      model: other-model
+
+remaps:
+    - prefix: remote/
+      provider: dummy
+      filters:
+        - "^mymodel"
+
+    # Technically, the prefixes don't have to be unique
+    # But they're differentiated here for easier testing
+    - prefix: remote2/
+      provider: dummy
