@@ -309,6 +309,14 @@ impl LlmProxy {
             .and_then(|header| header.strip_prefix("Bearer ").map(str::trim));
         std::future::ready(self.config.auth_check(token))
     }
+
+    fn health_check(State(_state): State<Arc<LlmProxy>>) -> impl Future<Output = Response> {
+        // Configuration has been fully parsed and processed at this point,
+        // so there isn't much left to do.
+        // TODO Maybe hit /v1/models endpoint on select providers? (Not
+        // all will necessarily have one. Plus more traffic.)
+        std::future::ready(Json(json!({"status":"still alive"})).into_response())
+    }
 }
 
 async fn shutdown_signal() {
@@ -395,6 +403,7 @@ async fn main() -> Result<()> {
             shared_model_gateway.clone(),
             my_auth_middleware,
         ))
+        .route("/health", get(LlmProxy::health_check))
         .with_state(shared_model_gateway);
 
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
