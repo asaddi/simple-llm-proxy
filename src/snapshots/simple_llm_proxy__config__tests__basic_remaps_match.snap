@@ -2,65 +2,92 @@
 source: src/config.rs
 expression: processed
 ---
-remaps:
-  - prefix: remote/
-    provider: dummy
-    base_url: "https://example.com/v1"
-    api_key: sk-12345
-    models:
-      models:
-        - remote/mymodel123
-      model_map:
-        remote/mymodel123:
-          base_url: "https://example.com/v1"
-          api_key: sk-12345
-          model: mymodel123
-  - prefix: remote2/
-    provider: dummy
-    base_url: "https://example.com/v1"
-    api_key: sk-12345
-    models:
-      models:
-        - remote2/nofilter
-      model_map:
-        remote2/nofilter:
-          base_url: "https://example.com/v1"
-          api_key: sk-12345
-          model: nofilter
-auth_tokens: {}
-config_models:
-  models:
-    - local/model
-    - remote/model
-  model_map:
-    local/model:
-      base_url: "http://localhost:8080/v1"
-      api_key: ~
-      model: whatever
-    remote/model:
-      base_url: "https://example.com/v1"
-      api_key: sk-12345
-      model: other-model
-all_models:
-  models:
-    - local/model
-    - remote/model
-    - remote/mymodel123
-    - remote2/nofilter
-  model_map:
-    local/model:
-      base_url: "http://localhost:8080/v1"
-      api_key: ~
-      model: whatever
-    remote/model:
-      base_url: "https://example.com/v1"
-      api_key: sk-12345
-      model: other-model
-    remote/mymodel123:
-      base_url: "https://example.com/v1"
-      api_key: sk-12345
-      model: mymodel123
-    remote2/nofilter:
-      base_url: "https://example.com/v1"
-      api_key: sk-12345
-      model: nofilter
+ProcessedConfig(
+  remaps: [
+    ProcessedRemap(
+      prefix: "remote/",
+      provider: "dummy",
+      base_url: "https://example.com/v1",
+      api_key: Some("sk-12345"),
+      models: ModelMap(
+        models: [
+          "remote/mymodel123",
+        ],
+        model_map: {
+          "remote/mymodel123": ModelTarget(
+            base_url: "https://example.com/v1",
+            api_key: Some("sk-12345"),
+            model: "mymodel123",
+          ),
+        },
+      ),
+    ),
+    ProcessedRemap(
+      prefix: "remote2/",
+      provider: "dummy",
+      base_url: "https://example.com/v1",
+      api_key: Some("sk-12345"),
+      models: ModelMap(
+        models: [
+          "remote2/nofilter",
+        ],
+        model_map: {
+          "remote2/nofilter": ModelTarget(
+            base_url: "https://example.com/v1",
+            api_key: Some("sk-12345"),
+            model: "nofilter",
+          ),
+        },
+      ),
+    ),
+  ],
+  auth_tokens: {},
+  config_models: ModelMap(
+    models: [
+      "local/model",
+      "remote/model",
+    ],
+    model_map: {
+      "local/model": ModelTarget(
+        base_url: "http://localhost:8080/v1",
+        api_key: None,
+        model: "whatever",
+      ),
+      "remote/model": ModelTarget(
+        base_url: "https://example.com/v1",
+        api_key: Some("sk-12345"),
+        model: "other-model",
+      ),
+    },
+  ),
+  all_models: ModelMap(
+    models: [
+      "local/model",
+      "remote/model",
+      "remote/mymodel123",
+      "remote2/nofilter",
+    ],
+    model_map: {
+      "local/model": ModelTarget(
+        base_url: "http://localhost:8080/v1",
+        api_key: None,
+        model: "whatever",
+      ),
+      "remote/model": ModelTarget(
+        base_url: "https://example.com/v1",
+        api_key: Some("sk-12345"),
+        model: "other-model",
+      ),
+      "remote/mymodel123": ModelTarget(
+        base_url: "https://example.com/v1",
+        api_key: Some("sk-12345"),
+        model: "mymodel123",
+      ),
+      "remote2/nofilter": ModelTarget(
+        base_url: "https://example.com/v1",
+        api_key: Some("sk-12345"),
+        model: "nofilter",
+      ),
+    },
+  ),
+)

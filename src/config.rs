@@ -317,7 +317,7 @@ impl ModelMap {
 #[cfg(test)]
 mod tests {
     use super::Config;
-    use insta::{assert_yaml_snapshot, sorted_redaction};
+    use insta::{assert_ron_snapshot, sorted_redaction};
 
     #[test]
     #[should_panic(expected = "Environment variable 'DUMMY_API_KEY'")]
@@ -333,7 +333,7 @@ mod tests {
         let config = Config::load("test/config-basic.yaml").unwrap();
         temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
             let processed = config.process_config();
-            assert_yaml_snapshot!(processed, {
+            assert_ron_snapshot!(processed, {
                 ".config_models.models" => sorted_redaction(),
                 ".config_models.model_map" => sorted_redaction(),
                 ".all_models.models" => sorted_redaction(),
@@ -352,7 +352,7 @@ mod tests {
             ],
             || {
                 let processed = config.process_config();
-                assert_yaml_snapshot!(processed, {
+                assert_ron_snapshot!(processed, {
                     ".auth_tokens" => sorted_redaction(),
                     ".config_models.models" => sorted_redaction(),
                     ".config_models.model_map" => sorted_redaction(),
@@ -368,7 +368,7 @@ mod tests {
         let config = Config::load("test/config-basic.yaml").unwrap();
         temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
             let processed = config.process_config();
-            assert_yaml_snapshot!(&processed.get_models(), {
+            assert_ron_snapshot!(&processed.get_models(), {
                 "." => sorted_redaction(),
             });
         });
@@ -379,8 +379,8 @@ mod tests {
         let config = Config::load("test/config-basic.yaml").unwrap();
         temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
             let processed = config.process_config();
-            assert_yaml_snapshot!(&processed.get_target("local/model").unwrap());
-            assert_yaml_snapshot!(&processed.get_target("remote/model").unwrap());
+            assert_ron_snapshot!(&processed.get_target("local/model").unwrap());
+            assert_ron_snapshot!(&processed.get_target("remote/model").unwrap());
         });
     }
 
@@ -427,7 +427,7 @@ mod tests {
     fn test_remaps() {
         let config = Config::load("test/config-remap.yaml").unwrap();
         let processed = config.process_config();
-        assert_yaml_snapshot!(processed, {
+        assert_ron_snapshot!(processed, {
             ".remaps" => sorted_redaction(),
             ".config_models.models" => sorted_redaction(),
             ".config_models.model_map" => sorted_redaction(),
@@ -487,7 +487,7 @@ mod tests {
             ]}))
             .unwrap();
         processed.update_models();
-        assert_yaml_snapshot!(processed, {
+        assert_ron_snapshot!(processed, {
             ".remaps" => sorted_redaction(),
             ".config_models.models" => sorted_redaction(),
             ".config_models.model_map" => sorted_redaction(),
@@ -525,7 +525,7 @@ mod tests {
             ]}))
             .unwrap();
         processed.update_models();
-        assert_yaml_snapshot!(processed, {
+        assert_ron_snapshot!(processed, {
             ".remaps" => sorted_redaction(),
             ".config_models.models" => sorted_redaction(),
             ".config_models.model_map" => sorted_redaction(),

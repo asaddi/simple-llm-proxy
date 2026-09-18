@@ -2,33 +2,46 @@
 source: src/config.rs
 expression: processed
 ---
-remaps: []
-auth_tokens:
-  my-12345: dummytoken
-  my-98765: envtoken
-config_models:
-  models:
-    - local/model
-    - remote/model
-  model_map:
-    local/model:
-      base_url: "http://localhost:8080/v1"
-      api_key: ~
-      model: whatever
-    remote/model:
-      base_url: "https://example.com/v1"
-      api_key: sk-12345
-      model: other-model
-all_models:
-  models:
-    - local/model
-    - remote/model
-  model_map:
-    local/model:
-      base_url: "http://localhost:8080/v1"
-      api_key: ~
-      model: whatever
-    remote/model:
-      base_url: "https://example.com/v1"
-      api_key: sk-12345
-      model: other-model
+ProcessedConfig(
+  remaps: [],
+  auth_tokens: {
+    "my-12345": "dummytoken",
+    "my-98765": "envtoken",
+  },
+  config_models: ModelMap(
+    models: [
+      "local/model",
+      "remote/model",
+    ],
+    model_map: {
+      "local/model": ModelTarget(
+        base_url: "http://localhost:8080/v1",
+        api_key: None,
+        model: "whatever",
+      ),
+      "remote/model": ModelTarget(
+        base_url: "https://example.com/v1",
+        api_key: Some("sk-12345"),
+        model: "other-model",
+      ),
+    },
+  ),
+  all_models: ModelMap(
+    models: [
+      "local/model",
+      "remote/model",
+    ],
+    model_map: {
+      "local/model": ModelTarget(
+        base_url: "http://localhost:8080/v1",
+        api_key: None,
+        model: "whatever",
+      ),
+      "remote/model": ModelTarget(
+        base_url: "https://example.com/v1",
+        api_key: Some("sk-12345"),
+        model: "other-model",
+      ),
+    },
+  ),
+)

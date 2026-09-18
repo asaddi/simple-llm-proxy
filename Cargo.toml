@@ -22,5 +22,5 @@ tracing = "^0.1.44"
 tracing-subscriber = { version = "^0.3.23", features = ["env-filter"] }
 
 [dev-dependencies]
-insta = { version = "1.48.0", features = ["redactions", "yaml"] }
+insta = { version = "1.48.0", default-features = false, features = ["redactions", "ron"] }
 temp-env = "0.3.6"
