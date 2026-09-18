@@ -99,15 +99,14 @@ impl Config {
                 base_url: p.base_url.trim_end_matches('/').to_string(),
                 api_key: p.api_key.as_ref().map(|k| resolve_api_key(k)),
             };
-            if provider_map
-                .insert(resolved_provider.name.clone(), resolved_provider)
-                .is_some()
-            {
+            if provider_map.contains_key(&resolved_provider.name) {
                 event!(
                     Level::WARN,
-                    "duplicate provider '{}'; later one wins",
+                    "duplicate provider '{}'; first one wins",
                     p.name
                 );
+            } else {
+                provider_map.insert(resolved_provider.name.clone(), resolved_provider);
             }
         }
 
@@ -150,7 +149,7 @@ impl Config {
         let mut config_models = ModelMap::new();
         for m in &self.models {
             if let Some(provider_config) = provider_map.get(&m.provider) {
-                if config_models.insert(
+                if !config_models.insert(
                     &m.name,
                     ModelTarget {
                         base_url: provider_config.base_url.clone(),
@@ -158,7 +157,7 @@ impl Config {
                         model: m.model.clone(),
                     },
                 ) {
-                    event!(Level::WARN, "duplicate model '{}'; later one wins", m.name);
+                    event!(Level::WARN, "duplicate model '{}'; first one wins", m.name);
                 }
             } else {
                 event!(
@@ -224,18 +223,18 @@ impl ProcessedConfig {
     pub fn update_models(&mut self) {
         let mut all_models = ModelMap::new();
 
-        // First, the models from prefix remaps, in order.
+        // First, the virtual models from the config.
+        for model in &self.config_models.models {
+            let model_target = self.config_models.get(model).unwrap();
+            all_models.insert(model, model_target);
+        }
+
+        // Then the models from prefix remaps, in order.
         for remap in &self.remaps {
             for remap_model in &remap.models.models {
                 let model_target = remap.models.get(remap_model).unwrap();
                 all_models.insert(remap_model, model_target);
             }
-        }
-
-        // Then the virtual models from the config.
-        for model in &self.config_models.models {
-            let model_target = self.config_models.get(model).unwrap();
-            all_models.insert(model, model_target);
         }
 
         self.all_models = all_models;
@@ -293,14 +292,11 @@ impl ModelMap {
     }
 
     fn insert(&mut self, model: &str, model_target: ModelTarget) -> bool {
-        if self
-            .model_map
-            .insert(model.to_owned(), model_target)
-            .is_none()
-        {
-            self.models.push(model.to_owned());
+        if self.model_map.contains_key(model) {
             false
         } else {
+            self.model_map.insert(model.to_owned(), model_target);
+            self.models.push(model.to_owned());
             true
         }
     }
