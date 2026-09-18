@@ -182,50 +182,6 @@ impl Config {
     }
 }
 
-#[test]
-#[should_panic(expected = "Environment variable 'DUMMY_API_KEY'")]
-fn test_missing_env() {
-    let config = Config::load("test/config-basic.yaml").unwrap();
-    temp_env::with_var_unset("DUMMY_API_KEY", || {
-        let _ = config.process_config();
-    });
-}
-
-#[test]
-fn test_basic_env() {
-    let config = Config::load("test/config-basic.yaml").unwrap();
-    temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
-        let processed = config.process_config();
-        insta::assert_yaml_snapshot!(processed, {
-            ".config_models.models" => insta::sorted_redaction(),
-            ".config_models.model_map" => insta::sorted_redaction(),
-            ".all_models.models" => insta::sorted_redaction(),
-            ".all_models.model_map" => insta::sorted_redaction(),
-        });
-    });
-}
-
-#[test]
-fn test_auth_tokens() {
-    let config = Config::load("test/config-auth.yaml").unwrap();
-    temp_env::with_vars(
-        [
-            ("DUMMY_API_KEY", Some("sk-54321")),
-            ("MY_ENV_TOKEN", Some("my-98765")),
-        ],
-        || {
-            let processed = config.process_config();
-            insta::assert_yaml_snapshot!(processed, {
-                ".auth_tokens" => insta::sorted_redaction(),
-                ".config_models.models" => insta::sorted_redaction(),
-                ".config_models.model_map" => insta::sorted_redaction(),
-                ".all_models.models" => insta::sorted_redaction(),
-                ".all_models.model_map" => insta::sorted_redaction(),
-            });
-        },
-    );
-}
-
 fn resolve_api_key(key: &str) -> String {
     let lower = key.to_lowercase();
     if lower.starts_with("env:") {
@@ -286,66 +242,6 @@ impl ProcessedConfig {
     }
 }
 
-#[test]
-fn test_get_models() {
-    let config = Config::load("test/config-basic.yaml").unwrap();
-    temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
-        let processed = config.process_config();
-        insta::assert_yaml_snapshot!(&processed.get_models(), {
-            "." => insta::sorted_redaction(),
-        });
-    });
-}
-
-#[test]
-fn test_get_target_found() {
-    let config = Config::load("test/config-basic.yaml").unwrap();
-    temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
-        let processed = config.process_config();
-        insta::assert_yaml_snapshot!(&processed.get_target("local/model").unwrap());
-        insta::assert_yaml_snapshot!(&processed.get_target("remote/model").unwrap());
-    });
-}
-
-#[test]
-fn test_get_target_not_found() {
-    let config = Config::load("test/config-basic.yaml").unwrap();
-    temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
-        let processed = config.process_config();
-        assert!(processed.get_target("somerandommodel").is_none());
-    });
-}
-
-#[test]
-fn test_auth_check_not_required() {
-    let config = Config::load("test/config-basic.yaml").unwrap();
-    temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
-        let processed = config.process_config();
-        assert!(processed.auth_check(None));
-        assert!(processed.auth_check(Some("my-invalid-key")));
-        assert!(processed.auth_check(Some("my-12345")));
-        assert!(processed.auth_check(Some("my-98765")));
-    });
-}
-
-#[test]
-fn test_auth_check_required() {
-    let config = Config::load("test/config-auth.yaml").unwrap();
-    temp_env::with_vars(
-        [
-            ("DUMMY_API_KEY", Some("sk-54321")),
-            ("MY_ENV_TOKEN", Some("my-98765")),
-        ],
-        || {
-            let processed = config.process_config();
-            assert!(!processed.auth_check(None));
-            assert!(!processed.auth_check(Some("my-invalid-key")));
-            assert!(processed.auth_check(Some("my-12345")));
-            assert!(processed.auth_check(Some("my-98765")));
-        },
-    );
-}
-
 impl ProcessedRemap {
     fn is_model_selected(&self, model: &str) -> bool {
         if self.filters.is_empty() {
@@ -388,117 +284,6 @@ impl ProcessedRemap {
     }
 }
 
-#[test]
-fn test_remaps() {
-    let config = Config::load("test/config-remap.yaml").unwrap();
-    let processed = config.process_config();
-    insta::assert_yaml_snapshot!(processed, {
-        ".remaps" => insta::sorted_redaction(),
-        ".config_models.models" => insta::sorted_redaction(),
-        ".config_models.model_map" => insta::sorted_redaction(),
-        ".all_models.models" => insta::sorted_redaction(),
-        ".all_models.model_map" => insta::sorted_redaction(),
-    });
-}
-
-#[test]
-fn test_is_model_selected() {
-    let config = Config::load("test/config-remap.yaml").unwrap();
-    let processed = config.process_config();
-
-    // The "remote/" remap has a filter.
-    let remap = &processed
-        .remaps
-        .iter()
-        .find(|r| r.prefix == "remote/")
-        .unwrap();
-    assert!(remap.is_model_selected("mymodel1234"));
-    assert!(!remap.is_model_selected("blahmymodel1234"));
-    assert!(!remap.is_model_selected("someothermodel"));
-
-    // The "remote2/" remap doesn't.
-    let remap = &processed
-        .remaps
-        .iter()
-        .find(|r| r.prefix == "remote2/")
-        .unwrap();
-    assert!(remap.is_model_selected("mymodel1234"));
-    assert!(remap.is_model_selected("blahmymodel1234"));
-    assert!(remap.is_model_selected("someothermodel"));
-}
-
-#[test]
-fn test_basic_remaps_no_match() {
-    let config = Config::load("test/config-remap.yaml").unwrap();
-    let mut processed = config.process_config();
-    let remap1 = &mut processed.remaps[0];
-    remap1
-        .populate(&serde_json::json!({
-            "data": [
-            {
-                "id": "blahmodel",
-                "owned_by": "meeee",
-            }
-        ]}))
-        .unwrap();
-    let remap2 = &mut processed.remaps[1];
-    remap2
-        .populate(&serde_json::json!({
-            "data": [
-            {
-                "id": "nofilter",
-                "owned_by": "meeee",
-            }
-        ]}))
-        .unwrap();
-    processed.update_models();
-    insta::assert_yaml_snapshot!(processed, {
-        ".remaps" => insta::sorted_redaction(),
-        ".config_models.models" => insta::sorted_redaction(),
-        ".config_models.model_map" => insta::sorted_redaction(),
-        ".all_models.models" => insta::sorted_redaction(),
-        ".all_models.model_map" => insta::sorted_redaction(),
-    });
-}
-
-#[test]
-fn test_basic_remaps_match() {
-    let config = Config::load("test/config-remap.yaml").unwrap();
-    let mut processed = config.process_config();
-    let remap1 = &mut processed.remaps[0];
-    remap1
-        .populate(&serde_json::json!({
-            "data": [
-                {
-                    "id": "blahmodel",
-                    "owned_by": "meeee",
-                },
-                {
-                    "id": "mymodel123",
-                    "owned_by": "meeee",
-                }
-        ]}))
-        .unwrap();
-    let remap2 = &mut processed.remaps[1];
-    remap2
-        .populate(&serde_json::json!({
-            "data": [
-            {
-                "id": "nofilter",
-                "owned_by": "meeee",
-            }
-        ]}))
-        .unwrap();
-    processed.update_models();
-    insta::assert_yaml_snapshot!(processed, {
-        ".remaps" => insta::sorted_redaction(),
-        ".config_models.models" => insta::sorted_redaction(),
-        ".config_models.model_map" => insta::sorted_redaction(),
-        ".all_models.models" => insta::sorted_redaction(),
-        ".all_models.model_map" => insta::sorted_redaction(),
-    });
-}
-
 impl ModelMap {
     fn new() -> ModelMap {
         Self {
@@ -526,5 +311,226 @@ impl ModelMap {
 
     fn models(&self) -> Vec<String> {
         self.models.clone()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+    use insta::{assert_yaml_snapshot, sorted_redaction};
+
+    #[test]
+    #[should_panic(expected = "Environment variable 'DUMMY_API_KEY'")]
+    fn test_missing_env() {
+        let config = Config::load("test/config-basic.yaml").unwrap();
+        temp_env::with_var_unset("DUMMY_API_KEY", || {
+            let _ = config.process_config();
+        });
+    }
+
+    #[test]
+    fn test_basic_env() {
+        let config = Config::load("test/config-basic.yaml").unwrap();
+        temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+            let processed = config.process_config();
+            assert_yaml_snapshot!(processed, {
+                ".config_models.models" => sorted_redaction(),
+                ".config_models.model_map" => sorted_redaction(),
+                ".all_models.models" => sorted_redaction(),
+                ".all_models.model_map" => sorted_redaction(),
+            });
+        });
+    }
+
+    #[test]
+    fn test_auth_tokens() {
+        let config = Config::load("test/config-auth.yaml").unwrap();
+        temp_env::with_vars(
+            [
+                ("DUMMY_API_KEY", Some("sk-54321")),
+                ("MY_ENV_TOKEN", Some("my-98765")),
+            ],
+            || {
+                let processed = config.process_config();
+                assert_yaml_snapshot!(processed, {
+                    ".auth_tokens" => sorted_redaction(),
+                    ".config_models.models" => sorted_redaction(),
+                    ".config_models.model_map" => sorted_redaction(),
+                    ".all_models.models" => sorted_redaction(),
+                    ".all_models.model_map" => sorted_redaction(),
+                });
+            },
+        );
+    }
+
+    #[test]
+    fn test_get_models() {
+        let config = Config::load("test/config-basic.yaml").unwrap();
+        temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+            let processed = config.process_config();
+            assert_yaml_snapshot!(&processed.get_models(), {
+                "." => sorted_redaction(),
+            });
+        });
+    }
+
+    #[test]
+    fn test_get_target_found() {
+        let config = Config::load("test/config-basic.yaml").unwrap();
+        temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+            let processed = config.process_config();
+            assert_yaml_snapshot!(&processed.get_target("local/model").unwrap());
+            assert_yaml_snapshot!(&processed.get_target("remote/model").unwrap());
+        });
+    }
+
+    #[test]
+    fn test_get_target_not_found() {
+        let config = Config::load("test/config-basic.yaml").unwrap();
+        temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+            let processed = config.process_config();
+            assert!(processed.get_target("somerandommodel").is_none());
+        });
+    }
+
+    #[test]
+    fn test_auth_check_not_required() {
+        let config = Config::load("test/config-basic.yaml").unwrap();
+        temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+            let processed = config.process_config();
+            assert!(processed.auth_check(None));
+            assert!(processed.auth_check(Some("my-invalid-key")));
+            assert!(processed.auth_check(Some("my-12345")));
+            assert!(processed.auth_check(Some("my-98765")));
+        });
+    }
+
+    #[test]
+    fn test_auth_check_required() {
+        let config = Config::load("test/config-auth.yaml").unwrap();
+        temp_env::with_vars(
+            [
+                ("DUMMY_API_KEY", Some("sk-54321")),
+                ("MY_ENV_TOKEN", Some("my-98765")),
+            ],
+            || {
+                let processed = config.process_config();
+                assert!(!processed.auth_check(None));
+                assert!(!processed.auth_check(Some("my-invalid-key")));
+                assert!(processed.auth_check(Some("my-12345")));
+                assert!(processed.auth_check(Some("my-98765")));
+            },
+        );
+    }
+
+    #[test]
+    fn test_remaps() {
+        let config = Config::load("test/config-remap.yaml").unwrap();
+        let processed = config.process_config();
+        assert_yaml_snapshot!(processed, {
+            ".remaps" => sorted_redaction(),
+            ".config_models.models" => sorted_redaction(),
+            ".config_models.model_map" => sorted_redaction(),
+            ".all_models.models" => sorted_redaction(),
+            ".all_models.model_map" => sorted_redaction(),
+        });
+    }
+
+    #[test]
+    fn test_is_model_selected() {
+        let config = Config::load("test/config-remap.yaml").unwrap();
+        let processed = config.process_config();
+
+        // The "remote/" remap has a filter.
+        let remap = &processed
+            .remaps
+            .iter()
+            .find(|r| r.prefix == "remote/")
+            .unwrap();
+        assert!(remap.is_model_selected("mymodel1234"));
+        assert!(!remap.is_model_selected("blahmymodel1234"));
+        assert!(!remap.is_model_selected("someothermodel"));
+
+        // The "remote2/" remap doesn't.
+        let remap = &processed
+            .remaps
+            .iter()
+            .find(|r| r.prefix == "remote2/")
+            .unwrap();
+        assert!(remap.is_model_selected("mymodel1234"));
+        assert!(remap.is_model_selected("blahmymodel1234"));
+        assert!(remap.is_model_selected("someothermodel"));
+    }
+
+    #[test]
+    fn test_basic_remaps_no_match() {
+        let config = Config::load("test/config-remap.yaml").unwrap();
+        let mut processed = config.process_config();
+        let remap1 = &mut processed.remaps[0];
+        remap1
+            .populate(&serde_json::json!({
+                "data": [
+                {
+                    "id": "blahmodel",
+                    "owned_by": "meeee",
+                }
+            ]}))
+            .unwrap();
+        let remap2 = &mut processed.remaps[1];
+        remap2
+            .populate(&serde_json::json!({
+                "data": [
+                {
+                    "id": "nofilter",
+                    "owned_by": "meeee",
+                }
+            ]}))
+            .unwrap();
+        processed.update_models();
+        assert_yaml_snapshot!(processed, {
+            ".remaps" => sorted_redaction(),
+            ".config_models.models" => sorted_redaction(),
+            ".config_models.model_map" => sorted_redaction(),
+            ".all_models.models" => sorted_redaction(),
+            ".all_models.model_map" => sorted_redaction(),
+        });
+    }
+
+    #[test]
+    fn test_basic_remaps_match() {
+        let config = Config::load("test/config-remap.yaml").unwrap();
+        let mut processed = config.process_config();
+        let remap1 = &mut processed.remaps[0];
+        remap1
+            .populate(&serde_json::json!({
+                "data": [
+                    {
+                        "id": "blahmodel",
+                        "owned_by": "meeee",
+                    },
+                    {
+                        "id": "mymodel123",
+                        "owned_by": "meeee",
+                    }
+            ]}))
+            .unwrap();
+        let remap2 = &mut processed.remaps[1];
+        remap2
+            .populate(&serde_json::json!({
+                "data": [
+                {
+                    "id": "nofilter",
+                    "owned_by": "meeee",
+                }
+            ]}))
+            .unwrap();
+        processed.update_models();
+        assert_yaml_snapshot!(processed, {
+            ".remaps" => sorted_redaction(),
+            ".config_models.models" => sorted_redaction(),
+            ".config_models.model_map" => sorted_redaction(),
+            ".all_models.models" => sorted_redaction(),
+            ".all_models.model_map" => sorted_redaction(),
+        });
     }
 }
