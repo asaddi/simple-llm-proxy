@@ -6,6 +6,7 @@ use anyhow::{Context, Result, anyhow};
 use noyalib::from_str;
 use regex::Regex;
 use serde_json::Value;
+use tokio::sync::RwLock;
 use tracing::{Level, event};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -54,21 +55,21 @@ pub struct ProcessedConfig {
     auth_tokens: HashMap<String, String>,
     config_models: ModelMap,
 
-    // TODO does the following need to be atomic?
-    all_models: ModelMap,
+    #[serde(skip)]
+    all_models: RwLock<ModelMap>,
 }
 
 #[derive(Debug, serde::Serialize)]
 pub struct ProcessedRemap {
     prefix: String,
-    provider: String,
-    base_url: String,
-    api_key: Option<String>,
+    pub provider: String,
+    pub base_url: String,
+    pub api_key: Option<String>,
     #[serde(skip)]
     filters: Vec<Regex>,
 
-    // TODO does the following need to be atomic?
-    models: ModelMap,
+    #[serde(skip)]
+    models: RwLock<ModelMap>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -125,7 +126,7 @@ impl Config {
                     base_url: provider_config.base_url.clone(),
                     api_key: provider_config.api_key.clone(),
                     filters: regexps,
-                    models: ModelMap::new(),
+                    models: RwLock::new(ModelMap::new()),
                 };
                 remaps.push(processed_remap);
             } else {
@@ -176,7 +177,7 @@ impl Config {
             remaps,
             auth_tokens,
             config_models,
-            all_models,
+            all_models: RwLock::new(all_models),
         }
     }
 }
@@ -194,12 +195,14 @@ fn resolve_api_key(key: &str) -> String {
 }
 
 impl ProcessedConfig {
-    pub fn get_models(&self) -> Vec<String> {
-        self.all_models.models()
+    pub async fn get_models(&self) -> Vec<String> {
+        let r = self.all_models.read().await;
+        (*r).models().clone()
     }
 
-    pub fn get_target(&self, model: &str) -> Option<ModelTarget> {
-        self.all_models.get(model)
+    pub async fn get_target(&self, model: &str) -> Option<ModelTarget> {
+        let r = self.all_models.read().await;
+        (*r).get(model)
     }
 
     pub fn auth_check(&self, token: Option<&str>) -> bool {
@@ -219,8 +222,7 @@ impl ProcessedConfig {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn update_models(&mut self) {
+    pub async fn update_models(&self) {
         let mut all_models = ModelMap::new();
 
         // First, the virtual models from the config.
@@ -231,13 +233,18 @@ impl ProcessedConfig {
 
         // Then the models from prefix remaps, in order.
         for remap in &self.remaps {
-            for remap_model in &remap.models.models {
-                let model_target = remap.models.get(remap_model).unwrap();
-                all_models.insert(remap_model, model_target);
+            let r = remap.models.read().await;
+            let models = &r.models;
+            for remap_model in models {
+                let model_target = (*r).get(remap_model.as_str()).unwrap();
+                all_models.insert(remap_model.as_str(), model_target);
             }
         }
 
-        self.all_models = all_models;
+        {
+            let mut w = self.all_models.write().await;
+            *w = all_models;
+        }
     }
 }
 
@@ -250,8 +257,7 @@ impl ProcessedRemap {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn populate(&mut self, source: &Value) -> Result<()> {
+    pub async fn populate(&self, source: &Value) -> Result<()> {
         let models = source
             .get("data")
             .and_then(|d| d.as_array())
@@ -278,7 +284,10 @@ impl ProcessedRemap {
             }
         }
 
-        self.models = new_models;
+        {
+            let mut w = self.models.write().await;
+            *w = new_models;
+        }
         Ok(())
     }
 }
@@ -324,18 +333,22 @@ mod tests {
         });
     }
 
-    #[test]
-    fn test_basic_env() {
+    #[tokio::test]
+    async fn test_basic_env() {
         let config = Config::load("test/config-basic.yaml").unwrap();
-        temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+        temp_env::async_with_vars([("DUMMY_API_KEY", Some("sk-54321"))], async {
             let processed = config.process_config();
             assert_ron_snapshot!(processed, {
                 ".config_models.models" => sorted_redaction(),
                 ".config_models.model_map" => sorted_redaction(),
-                ".all_models.models" => sorted_redaction(),
-                ".all_models.model_map" => sorted_redaction(),
             });
-        });
+            let all_models = processed.all_models.read().await;
+            assert_ron_snapshot!(*all_models, {
+                ".models" => sorted_redaction(),
+                ".model_map" => sorted_redaction(),
+            });
+        })
+        .await;
     }
 
     #[test]
@@ -352,41 +365,42 @@ mod tests {
                     ".auth_tokens" => sorted_redaction(),
                     ".config_models.models" => sorted_redaction(),
                     ".config_models.model_map" => sorted_redaction(),
-                    ".all_models.models" => sorted_redaction(),
-                    ".all_models.model_map" => sorted_redaction(),
                 });
             },
         );
     }
 
-    #[test]
-    fn test_get_models() {
+    #[tokio::test]
+    async fn test_get_models() {
         let config = Config::load("test/config-basic.yaml").unwrap();
-        temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+        temp_env::async_with_vars([("DUMMY_API_KEY", Some("sk-54321"))], async {
             let processed = config.process_config();
-            assert_ron_snapshot!(&processed.get_models(), {
+            assert_ron_snapshot!(&processed.get_models().await, {
                 "." => sorted_redaction(),
             });
-        });
+        })
+        .await;
     }
 
-    #[test]
-    fn test_get_target_found() {
+    #[tokio::test]
+    async fn test_get_target_found() {
         let config = Config::load("test/config-basic.yaml").unwrap();
-        temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+        temp_env::async_with_vars([("DUMMY_API_KEY", Some("sk-54321"))], async {
             let processed = config.process_config();
-            assert_ron_snapshot!(&processed.get_target("local/model").unwrap());
-            assert_ron_snapshot!(&processed.get_target("remote/model").unwrap());
-        });
+            assert_ron_snapshot!(&processed.get_target("local/model").await.unwrap());
+            assert_ron_snapshot!(&processed.get_target("remote/model").await.unwrap());
+        })
+        .await;
     }
 
-    #[test]
-    fn test_get_target_not_found() {
+    #[tokio::test]
+    async fn test_get_target_not_found() {
         let config = Config::load("test/config-basic.yaml").unwrap();
-        temp_env::with_var("DUMMY_API_KEY", Some("sk-54321"), || {
+        temp_env::async_with_vars([("DUMMY_API_KEY", Some("sk-54321"))], async {
             let processed = config.process_config();
-            assert!(processed.get_target("somerandommodel").is_none());
-        });
+            assert!(processed.get_target("somerandommodel").await.is_none());
+        })
+        .await;
     }
 
     #[test]
@@ -419,16 +433,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_remaps() {
+    #[tokio::test]
+    async fn test_remaps() {
         let config = Config::load("test/config-remap.yaml").unwrap();
         let processed = config.process_config();
         assert_ron_snapshot!(processed, {
             ".remaps" => sorted_redaction(),
             ".config_models.models" => sorted_redaction(),
             ".config_models.model_map" => sorted_redaction(),
-            ".all_models.models" => sorted_redaction(),
-            ".all_models.model_map" => sorted_redaction(),
+        });
+        let all_models = processed.all_models.read().await;
+        assert_ron_snapshot!(*all_models, {
+            ".models" => sorted_redaction(),
+            ".model_map" => sorted_redaction(),
         });
     }
 
@@ -458,11 +475,12 @@ mod tests {
         assert!(remap.is_model_selected("someothermodel"));
     }
 
-    #[test]
-    fn test_basic_remaps_no_match() {
+    #[tokio::test]
+    async fn test_basic_remaps_no_match() {
         let config = Config::load("test/config-remap.yaml").unwrap();
         let mut processed = config.process_config();
         let remap1 = &mut processed.remaps[0];
+        // blahmodel matches none of remap1's filters
         remap1
             .populate(&serde_json::json!({
                 "data": [
@@ -471,6 +489,7 @@ mod tests {
                     "owned_by": "meeee",
                 }
             ]}))
+            .await
             .unwrap();
         let remap2 = &mut processed.remaps[1];
         remap2
@@ -481,22 +500,28 @@ mod tests {
                     "owned_by": "meeee",
                 }
             ]}))
+            .await
             .unwrap();
-        processed.update_models();
+        processed.update_models().await;
         assert_ron_snapshot!(processed, {
             ".remaps" => sorted_redaction(),
             ".config_models.models" => sorted_redaction(),
             ".config_models.model_map" => sorted_redaction(),
-            ".all_models.models" => sorted_redaction(),
-            ".all_models.model_map" => sorted_redaction(),
+        });
+        let all_models = processed.all_models.read().await;
+        assert_ron_snapshot!(*all_models, {
+            ".models" => sorted_redaction(),
+            ".model_map" => sorted_redaction(),
         });
     }
 
-    #[test]
-    fn test_basic_remaps_match() {
+    #[tokio::test]
+    async fn test_basic_remaps_match() {
         let config = Config::load("test/config-remap.yaml").unwrap();
         let mut processed = config.process_config();
         let remap1 = &mut processed.remaps[0];
+        // blahmodel matches none of remap1's filters
+        // but mymodel123 does
         remap1
             .populate(&serde_json::json!({
                 "data": [
@@ -509,6 +534,7 @@ mod tests {
                         "owned_by": "meeee",
                     }
             ]}))
+            .await
             .unwrap();
         let remap2 = &mut processed.remaps[1];
         remap2
@@ -519,14 +545,18 @@ mod tests {
                     "owned_by": "meeee",
                 }
             ]}))
+            .await
             .unwrap();
-        processed.update_models();
+        processed.update_models().await;
         assert_ron_snapshot!(processed, {
             ".remaps" => sorted_redaction(),
             ".config_models.models" => sorted_redaction(),
             ".config_models.model_map" => sorted_redaction(),
-            ".all_models.models" => sorted_redaction(),
-            ".all_models.model_map" => sorted_redaction(),
+        });
+        let all_models = processed.all_models.read().await;
+        assert_ron_snapshot!(*all_models, {
+            ".models" => sorted_redaction(),
+            ".model_map" => sorted_redaction(),
         });
     }
 }
