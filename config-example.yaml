@@ -23,11 +23,11 @@ models:
     provider: OpenRouter
     model: qwen/qwen3.8-27b
 
-remap:
+remaps:
   - prefix: openrouter/
     provider: OpenRouter
     # The following is optional
-    filter:
+    filters:
       - "^qwen/qwen3\\.8"
       - "^z-ai/glm-5\\.3"
 
