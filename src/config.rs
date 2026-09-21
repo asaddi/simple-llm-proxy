@@ -98,7 +98,7 @@ impl Config {
             let resolved_provider = ProviderConfig {
                 name: p.name.clone(),
                 base_url: p.base_url.trim_end_matches('/').to_string(),
-                api_key: p.api_key.as_ref().map(|k| resolve_api_key(k)),
+                api_key: p.api_key.as_ref().map(|k| Self::resolve_api_key(k)),
             };
             if provider_map.contains_key(&resolved_provider.name) {
                 event!(
@@ -141,7 +141,7 @@ impl Config {
 
         let mut auth_tokens = HashMap::new();
         for a in &self.require_auth.unwrap_or_default() {
-            let token = resolve_api_key(a.token.as_str());
+            let token = Self::resolve_api_key(a.token.as_str());
             if auth_tokens.insert(token, a.id.clone()).is_some() {
                 event!(Level::WARN, "duplicate auth token with id '{}'", a.id);
             }
@@ -180,17 +180,17 @@ impl Config {
             all_models: RwLock::new(all_models),
         }
     }
-}
 
-fn resolve_api_key(key: &str) -> String {
-    let lower = key.to_lowercase();
-    if lower.starts_with("env:") {
-        let env_var = &key[4..];
-        std::env::var(env_var)
-            .unwrap_or_else(|_| panic!("Environment variable '{env_var}' not found"))
-        // FIXME don't panic
-    } else {
-        key.to_string()
+    fn resolve_api_key(key: &str) -> String {
+        let lower = key.to_lowercase();
+        if lower.starts_with("env:") {
+            let env_var = &key[4..];
+            std::env::var(env_var)
+                .unwrap_or_else(|_| panic!("Environment variable '{env_var}' not found"))
+            // FIXME don't panic
+        } else {
+            key.to_string()
+        }
     }
 }
 
