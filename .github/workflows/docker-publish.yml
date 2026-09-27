@@ -7,6 +7,8 @@ name: Docker
 
 on:
   push:
+    branches:
+      - latest
     # Publish semver tags as releases.
     tags: [ 'v*.*.*' ]
   workflow_dispatch:
