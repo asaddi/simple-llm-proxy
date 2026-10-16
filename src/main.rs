@@ -147,6 +147,27 @@ impl LlmProxy {
             .unwrap()
     }
 
+    fn should_retry(status_code: StatusCode) -> bool {
+        matches!(
+            status_code,
+            StatusCode::REQUEST_TIMEOUT
+                | StatusCode::TOO_MANY_REQUESTS
+                | StatusCode::TOO_EARLY
+                | StatusCode::INTERNAL_SERVER_ERROR // Should this be retried?
+                | StatusCode::SERVICE_UNAVAILABLE
+                | StatusCode::GATEWAY_TIMEOUT
+                | StatusCode::BAD_GATEWAY
+        )
+    }
+
+    fn next_backoff(delay: Duration) -> Duration {
+        // TODO configure this
+        let max_delay = Duration::from_secs(60);
+        // TODO should this be more complex?
+        // Does it need jitter to avoid thundering herd?
+        max_delay.min(delay * 2)
+    }
+
     async fn post_proxy(
         &self,
         base_url: &str,
@@ -154,24 +175,57 @@ impl LlmProxy {
         path: &str,
         Json(payload): Json<Value>,
     ) -> Result<Response> {
-        event!(Level::DEBUG, "proxying POST to {base_url} {path}");
-        let orig_resp = self
-            .client
-            .post(Self::endpoint(base_url, path))
-            .maybe_bearer_auth(api_key)
-            .json(&payload)
-            .send()
-            .await?;
-        Ok(Self::make_proxy_response(orig_resp))
+        let endpoint = Self::endpoint(base_url, path);
+        event!(Level::DEBUG, "proxying POST to {endpoint}");
+        // TODO make configurable?
+        let max_retries = 3;
+        let mut delay = Duration::from_secs(3);
+
+        let mut retries = 0;
+        loop {
+            let orig_resp_result = self
+                .client
+                .post(&endpoint)
+                .maybe_bearer_auth(api_key)
+                .json(&payload)
+                .send()
+                .await;
+
+            match orig_resp_result {
+                Ok(orig_resp) => {
+                    let status_code = orig_resp.status();
+                    if retries < max_retries && Self::should_retry(status_code) {
+                        event!(
+                            Level::WARN,
+                            "error proxying POST to {endpoint}: {status_code}; retrying after {delay:?}"
+                        );
+                    } else {
+                        break Ok(Self::make_proxy_response(orig_resp));
+                    }
+                }
+                Err(e) => {
+                    if retries < max_retries {
+                        event!(Level::DEBUG, "{e}; retrying after {delay:?}");
+                    } else {
+                        break Err(e.into());
+                    }
+                }
+            }
+
+            tokio::time::sleep(delay).await;
+            delay = Self::next_backoff(delay);
+            retries += 1;
+        }
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     async fn get_proxy(
         &self,
         base_url: &str,
         api_key: Option<&str>,
         path: &str,
     ) -> Result<Response> {
+        // TODO Needs retry logic if it ever gets used
         let orig_resp = self
             .client
             .get(Self::endpoint(base_url, path))
@@ -324,15 +378,48 @@ impl LlmProxy {
     }
 
     async fn query_provider(&self, remap: &ProcessedRemap) -> Result<Value> {
-        let resp = self
-            .client
-            .get(Self::endpoint(&remap.base_url, "/models"))
-            .maybe_bearer_auth(remap.api_key.as_deref())
-            .send()
-            .await?;
-        resp.json()
-            .await
-            .with_context(|| "failed to deserialize response")
+        let endpoint = Self::endpoint(&remap.base_url, "/models");
+        // TODO make configurable?
+        let max_retries = 3;
+        let mut delay = Duration::from_secs(3);
+
+        let mut retries = 0;
+        loop {
+            let resp_result = self
+                .client
+                .get(&endpoint)
+                .maybe_bearer_auth(remap.api_key.as_deref())
+                .send()
+                .await;
+
+            match resp_result {
+                Ok(resp) => {
+                    let status_code = resp.status();
+                    if retries < max_retries && Self::should_retry(status_code) {
+                        event!(
+                            Level::WARN,
+                            "error querying {endpoint}: {status_code}; retrying after {delay:?}"
+                        );
+                    } else {
+                        break resp
+                            .json()
+                            .await
+                            .with_context(|| "failed to deserialize response");
+                    }
+                }
+                Err(e) => {
+                    if retries < max_retries {
+                        event!(Level::DEBUG, "{e}; retrying after {delay:?}");
+                    } else {
+                        break Err(e.into());
+                    }
+                }
+            }
+
+            tokio::time::sleep(delay).await;
+            delay = Self::next_backoff(delay);
+            retries += 1;
+        }
     }
 
     async fn update_remaps(&self) {
