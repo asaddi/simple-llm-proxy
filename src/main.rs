@@ -205,7 +205,7 @@ impl LlmProxy {
                 }
                 Err(e) => {
                     if retries < max_retries {
-                        event!(Level::DEBUG, "{e}; retrying after {delay:?}");
+                        event!(Level::WARN, "{e}; retrying after {delay:?}");
                     } else {
                         break Err(e.into());
                     }
@@ -409,7 +409,7 @@ impl LlmProxy {
                 }
                 Err(e) => {
                     if retries < max_retries {
-                        event!(Level::DEBUG, "{e}; retrying after {delay:?}");
+                        event!(Level::WARN, "{e}; retrying after {delay:?}");
                     } else {
                         break Err(e.into());
                     }
