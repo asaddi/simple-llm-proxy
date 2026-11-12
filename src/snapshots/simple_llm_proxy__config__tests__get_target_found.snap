@@ -1,9 +1,10 @@
 ---
 source: src/config.rs
-expression: "&processed.get_target(\"local/model\").unwrap()"
+expression: "&processed.get_target(\"local/model\").await.unwrap()"
 ---
 ModelTarget(
   base_url: "http://localhost:8080/v1",
   api_key: None,
   model: "whatever",
+  custom_keys: None,
 )

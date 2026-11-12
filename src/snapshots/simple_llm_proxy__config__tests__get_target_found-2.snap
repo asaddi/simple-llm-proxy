@@ -1,9 +1,10 @@
 ---
 source: src/config.rs
-expression: "&processed.get_target(\"remote/model\").unwrap()"
+expression: "&processed.get_target(\"remote/model\").await.unwrap()"
 ---
 ModelTarget(
   base_url: "https://example.com/v1",
   api_key: Some("sk-12345"),
   model: "other-model",
+  custom_keys: None,
 )

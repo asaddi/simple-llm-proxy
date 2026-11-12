@@ -14,21 +14,25 @@ ModelMap(
       base_url: "http://localhost:8080/v1",
       api_key: None,
       model: "whatever",
+      custom_keys: None,
     ),
     "remote/model": ModelTarget(
       base_url: "https://example.com/v1",
       api_key: Some("sk-12345"),
       model: "other-model",
+      custom_keys: None,
     ),
     "remote/mymodel123": ModelTarget(
       base_url: "https://example.com/v1",
       api_key: Some("sk-12345"),
       model: "mymodel123",
+      custom_keys: None,
     ),
     "remote2/nofilter": ModelTarget(
       base_url: "https://example.com/v1",
       api_key: Some("sk-12345"),
       model: "nofilter",
+      custom_keys: None,
     ),
   },
 )

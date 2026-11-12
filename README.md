@@ -42,3 +42,6 @@ They're a bit *too* heavy for my homelab needs, which is why I've tried to move 
    * `POST /responses` is already supported, which is enough for backends that don't store responses (e.g. llama.cpp)
    * It turns out that even `POST /chat/completions` returns the actual model that was used. I don't do any remapping of the returned model there and clients seem to work fine. So I will KISS and forget about remapping the returned model.
    * Frankly, I personally don't have any frontends or agents that support Responses API, so I don't have much motivation to implement this.
+* [x] Allow specifying custom keys (e.g. `reasoning_effort`) that are added to the JSON request body sent to provider endpoints.
+* [ ] "Custom keys" support at the provider and model remap level. For the former, the keys will be merged with any model-specific custom keys.
+* [ ] Similar to the "custom keys" feature, a "custom headers" feature. Though I'm not quite sure which providers would actually use this.

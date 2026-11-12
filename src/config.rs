@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result, anyhow};
+use indexmap::IndexMap;
 use noyalib::from_str;
 use regex::Regex;
 use serde_json::Value;
 use tokio::sync::RwLock;
 use tracing::{Level, event};
+
+type CustomKeys = IndexMap<String, String>;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct Config {
@@ -32,6 +35,8 @@ struct ModelConfig {
     name: String,
     provider: String,
     model: String,
+
+    custom_keys: Option<CustomKeys>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -81,6 +86,7 @@ pub struct ModelTarget {
     pub base_url: String,
     pub api_key: Option<String>,
     pub model: String,
+    pub custom_keys: Option<CustomKeys>,
 }
 
 impl Config {
@@ -148,12 +154,14 @@ impl Config {
         let mut config_models = ModelMap::new();
         for m in &self.models {
             if let Some(provider_config) = provider_map.get(&m.provider) {
+                let m = m.process();
                 if !config_models.insert(
                     &m.name,
                     ModelTarget {
                         base_url: provider_config.base_url.clone(),
                         api_key: provider_config.api_key.clone(),
-                        model: m.model.clone(),
+                        model: m.model,
+                        custom_keys: m.custom_keys,
                     },
                 ) {
                     event!(Level::WARN, "duplicate model '{}'; first one wins", m.name);
@@ -188,6 +196,34 @@ impl Config {
             // FIXME don't panic
         } else {
             key.to_string()
+        }
+    }
+}
+
+impl ModelConfig {
+    fn process(&self) -> Self {
+        if let Some(custom_keys) = &self.custom_keys {
+            let mut new_custom_keys: CustomKeys = IndexMap::new();
+
+            for (k, v) in custom_keys {
+                if let Ok(resolved) = shellexpand::env(v) {
+                    new_custom_keys.insert(k.clone(), resolved.to_string());
+                } else {
+                    event!(
+                        Level::WARN,
+                        "{}/{k}: failed to expand value; ignoring",
+                        self.name
+                    );
+                }
+            }
+            Self {
+                name: self.name.clone(),
+                provider: self.provider.clone(),
+                model: self.model.clone(),
+                custom_keys: Some(new_custom_keys),
+            }
+        } else {
+            self.clone()
         }
     }
 }
@@ -277,6 +313,7 @@ impl ProcessedRemap {
                         base_url: self.base_url.clone(),
                         api_key: self.api_key.clone(),
                         model: model.to_owned(),
+                        custom_keys: None, // TODO should inherit from remap
                     },
                 );
             }
@@ -556,5 +593,23 @@ mod tests {
             ".models" => sorted_redaction(),
             ".model_map" => sorted_redaction(),
         });
+    }
+
+    #[tokio::test]
+    async fn test_model_custom_keys() {
+        let config = Config::load("test/config-custom_keys.yaml").unwrap();
+        temp_env::async_with_vars([("DUMMY_API_KEY", Some("sk-54321"))], async {
+            let processed = config.process_config();
+            assert_ron_snapshot!(processed, {
+                ".config_models.models" => sorted_redaction(),
+                ".config_models.model_map" => sorted_redaction(),
+            });
+            let all_models = processed.all_models.read().await;
+            assert_ron_snapshot!(*all_models, {
+                ".models" => sorted_redaction(),
+                ".model_map" => sorted_redaction(),
+            });
+        })
+        .await;
     }
 }

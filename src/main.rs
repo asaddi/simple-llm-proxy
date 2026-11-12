@@ -252,6 +252,11 @@ impl LlmProxy {
                     "model".to_owned(),
                     Value::String(model_target.model.clone()),
                 );
+                if let Some(custom_keys) = &model_target.custom_keys {
+                    for (k, v) in custom_keys {
+                        input_map.insert(k.clone(), Value::String(v.clone()));
+                    }
+                }
                 let output = Value::Object(input_map.clone());
                 Ok((model_target, output, received_model))
             } else {
